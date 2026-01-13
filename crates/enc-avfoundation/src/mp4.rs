@@ -1,10 +1,8 @@
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
-use ffmpeg::{frame, software::resampling};
+use ffmpeg::frame;
 use std::{path::PathBuf, time::Duration};
 use tracing::*;
-
-const AAC_MAX_SAMPLE_RATE: u32 = 48000;
 
 // before pausing at all, subtract 0.
 // on pause, record last frame time.
@@ -18,8 +16,6 @@ pub struct MP4Encoder {
     asset_writer: arc::R<av::AssetWriter>,
     video_input: arc::R<av::AssetWriterInput>,
     audio_input: Option<arc::R<av::AssetWriterInput>>,
-    audio_resampler: Option<resampling::Context>,
-    audio_output_rate: u32,
     last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
@@ -48,8 +44,6 @@ pub enum InitError {
     AudioAssetWriterInputCreate(&'static cidre::ns::Exception),
     #[error("AddAudioInput/{0}")]
     AddAudioInput(&'static cidre::ns::Exception),
-    #[error("AudioResampler/{0}")]
-    AudioResampler(ffmpeg::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -66,8 +60,6 @@ pub enum QueueFrameError {
     NotReadyForMore,
     #[error("NoEncoder")]
     NoEncoder,
-    #[error("ResamplingFailed/{0}")]
-    ResamplingFailed(ffmpeg::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -191,42 +183,10 @@ impl MP4Encoder {
             video_input
         };
 
-        let (audio_input, audio_resampler, audio_output_rate) = match audio_config.as_ref() {
-            Some(config) => {
+        let audio_input = audio_config
+            .as_ref()
+            .map(|config| {
                 debug!("{config:?}");
-
-                let output_rate = config.sample_rate.min(AAC_MAX_SAMPLE_RATE);
-
-                let resampler = if config.sample_rate > AAC_MAX_SAMPLE_RATE {
-                    info!(
-                        input_rate = config.sample_rate,
-                        output_rate,
-                        "Audio sample rate {} exceeds AAC max {}, resampling",
-                        config.sample_rate,
-                        AAC_MAX_SAMPLE_RATE
-                    );
-
-                    let mut output_config = *config;
-                    output_config.sample_rate = output_rate;
-
-                    Some(
-                        ffmpeg::software::resampler(
-                            (
-                                config.sample_format,
-                                config.channel_layout(),
-                                config.sample_rate,
-                            ),
-                            (
-                                output_config.sample_format,
-                                output_config.channel_layout(),
-                                output_config.sample_rate,
-                            ),
-                        )
-                        .map_err(InitError::AudioResampler)?,
-                    )
-                } else {
-                    None
-                };
 
                 let output_settings = cidre::ns::Dictionary::with_keys_values(
                     &[
@@ -237,7 +197,7 @@ impl MP4Encoder {
                     &[
                         cat::AudioFormat::MPEG4_AAC.as_ref(),
                         (config.channels as u32).as_ref(),
-                        output_rate.as_ref(),
+                        (config.sample_rate).as_ref(),
                     ],
                 );
 
@@ -253,18 +213,15 @@ impl MP4Encoder {
                     .add_input(&audio_input)
                     .map_err(InitError::AddAudioInput)?;
 
-                (Some(audio_input), resampler, output_rate)
-            }
-            None => (None, None, 0),
-        };
+                Ok::<_, InitError>(audio_input)
+            })
+            .transpose()?;
 
         asset_writer.start_writing();
 
         Ok(Self {
             config: video_config,
             audio_input,
-            audio_resampler,
-            audio_output_rate,
             asset_writer,
             video_input,
             last_frame_timestamp: None,
@@ -303,11 +260,11 @@ impl MP4Encoder {
 
         self.last_frame_timestamp = Some(timestamp);
 
-        if let Some(pause_timestamp) = self.pause_timestamp
-            && let Some(gap) = timestamp.checked_sub(pause_timestamp)
-        {
-            self.timestamp_offset += gap;
-            self.pause_timestamp = None;
+        if let Some(pause_timestamp) = self.pause_timestamp {
+            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
+                self.timestamp_offset += gap;
+                self.pause_timestamp = None;
+            }
         }
 
         let mut pts_duration = timestamp
@@ -365,58 +322,15 @@ impl MP4Encoder {
             return Err(QueueFrameError::NoEncoder);
         };
 
-        if let Some(pause_timestamp) = self.pause_timestamp
-            && let Some(gap) = timestamp.checked_sub(pause_timestamp)
-        {
-            self.timestamp_offset += gap;
-            self.pause_timestamp = None;
+        if let Some(pause_timestamp) = self.pause_timestamp {
+            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
+                self.timestamp_offset += gap;
+                self.pause_timestamp = None;
+            }
         }
 
         if !audio_input.is_ready_for_more_media_data() {
             return Err(QueueFrameError::NotReadyForMore);
-        }
-
-        let processed_frame: std::borrow::Cow<'_, frame::Audio> =
-            if let Some(resampler) = &mut self.audio_resampler {
-                let mut resampled = frame::Audio::empty();
-                match resampler.run(frame, &mut resampled) {
-                    Ok(_) => {
-                        resampled.set_rate(self.audio_output_rate);
-                        if resampled.samples() == 0 {
-                            warn!(
-                                input_samples = frame.samples(),
-                                input_rate = frame.rate(),
-                                output_rate = self.audio_output_rate,
-                                "Audio resampling produced 0 samples"
-                            );
-                            return Ok(());
-                        }
-                        std::borrow::Cow::Owned(resampled)
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            input_samples = frame.samples(),
-                            input_rate = frame.rate(),
-                            output_rate = self.audio_output_rate,
-                            "Audio resampling failed"
-                        );
-                        return Err(QueueFrameError::ResamplingFailed(e));
-                    }
-                }
-            } else {
-                std::borrow::Cow::Borrowed(frame)
-            };
-
-        let frame = processed_frame.as_ref();
-
-        if frame.samples() == 0 {
-            warn!(
-                rate = frame.rate(),
-                channels = frame.channels(),
-                "Received audio frame with 0 samples, skipping"
-            );
-            return Ok(());
         }
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(

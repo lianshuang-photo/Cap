@@ -171,10 +171,10 @@ impl RecordingTestReport {
                 result.is_hardware_accelerated
             );
             if let Some(reason) = &result.fallback_reason {
-                println!("      Fallback: {reason}");
+                println!("      Fallback: {}", reason);
             }
             for err in &result.errors {
-                println!("      ERROR: {err}");
+                println!("      ERROR: {}", err);
             }
         }
 
@@ -203,10 +203,13 @@ impl RecordingTestReport {
                 println!("      WARN: FPS outside tolerance!");
             }
             if !result.decode_latency_ok {
-                println!("      WARN: Decode latency exceeds {DECODE_LATENCY_WARNING_MS}ms!");
+                println!(
+                    "      WARN: Decode latency exceeds {}ms!",
+                    DECODE_LATENCY_WARNING_MS
+                );
             }
             for err in &result.errors {
-                println!("      ERROR: {err}");
+                println!("      ERROR: {}", err);
             }
         }
 
@@ -246,7 +249,7 @@ impl RecordingTestReport {
                     );
                 }
                 for err in &result.errors {
-                    println!("      ERROR: {err}");
+                    println!("      ERROR: {}", err);
                 }
             }
         }
@@ -258,7 +261,7 @@ impl RecordingTestReport {
                 if result.has_camera {
                     let drift_str = result
                         .camera_display_drift_ms
-                        .map(|d| format!("{d:.1}ms"))
+                        .map(|d| format!("{:.1}ms", d))
                         .unwrap_or_else(|| "N/A".to_string());
                     println!(
                         "    Segment {}: [{}] drift={} frames={}(cam)/{}(disp)",
@@ -270,14 +273,15 @@ impl RecordingTestReport {
                     );
                     if !result.drift_ok {
                         println!(
-                            "      WARN: Camera-display drift exceeds {CAMERA_SYNC_TOLERANCE_MS}ms!"
+                            "      WARN: Camera-display drift exceeds {}ms!",
+                            CAMERA_SYNC_TOLERANCE_MS
                         );
                     }
                 } else {
                     println!("    Segment {}: No camera", result.segment_index);
                 }
                 for err in &result.errors {
-                    println!("      ERROR: {err}");
+                    println!("      ERROR: {}", err);
                 }
             }
         }
@@ -317,7 +321,7 @@ async fn test_decoder(video_path: &Path, fps: u32, is_camera: bool) -> DecoderTe
         }
         Err(e) => {
             result.init_time_ms = start.elapsed().as_secs_f64() * 1000.0;
-            result.errors.push(format!("Decoder init failed: {e}"));
+            result.errors.push(format!("Decoder init failed: {}", e));
             result.passed = false;
         }
     }
@@ -350,7 +354,9 @@ async fn test_playback(
     let decoder = match spawn_decoder("display", display_path.clone(), fps, 0.0).await {
         Ok(d) => d,
         Err(e) => {
-            result.errors.push(format!("Failed to create decoder: {e}"));
+            result
+                .errors
+                .push(format!("Failed to create decoder: {}", e));
             return result;
         }
     };
@@ -379,7 +385,7 @@ async fn test_playback(
                 if frame.width() == 0 || frame.height() == 0 {
                     result
                         .errors
-                        .push(format!("Frame {frame_num} has zero dimensions"));
+                        .push(format!("Frame {} has zero dimensions", frame_num));
                 }
 
                 if verbose && frame_num % 30 == 0 {
@@ -396,7 +402,7 @@ async fn test_playback(
             None => {
                 failed_count += 1;
                 if verbose {
-                    println!("    Frame {frame_num}: FAILED");
+                    println!("    Frame {}: FAILED", frame_num);
                 }
             }
         }
@@ -494,7 +500,9 @@ async fn test_audio_sync(
                 }
             }
             Err(e) => {
-                result.errors.push(format!("Failed to load mic audio: {e}"));
+                result
+                    .errors
+                    .push(format!("Failed to load mic audio: {}", e));
             }
         }
     }
@@ -513,7 +521,7 @@ async fn test_audio_sync(
             Err(e) => {
                 result
                     .errors
-                    .push(format!("Failed to load system audio: {e}"));
+                    .push(format!("Failed to load system audio: {}", e));
             }
         }
     }
@@ -584,7 +592,7 @@ async fn test_camera_sync(
         Err(e) => {
             result
                 .errors
-                .push(format!("Failed to create display decoder: {e}"));
+                .push(format!("Failed to create display decoder: {}", e));
             return result;
         }
     };
@@ -597,7 +605,7 @@ async fn test_camera_sync(
         Err(e) => {
             result
                 .errors
-                .push(format!("Failed to create camera decoder: {e}"));
+                .push(format!("Failed to create camera decoder: {}", e));
             result.camera_decoder_ok = false;
             return result;
         }
@@ -783,7 +791,7 @@ async fn run_tests_on_recording(
             };
 
             if verbose {
-                println!("  Testing decoder for segment {segment_idx} display...");
+                println!("  Testing decoder for segment {} display...", segment_idx);
             }
             let decoder_result = test_decoder(&display_path, fps, false).await;
             report.decoder_results.push(decoder_result);
@@ -800,7 +808,7 @@ async fn run_tests_on_recording(
 
             if let Some(cam_path) = camera_path {
                 if verbose {
-                    println!("  Testing decoder for segment {segment_idx} camera...");
+                    println!("  Testing decoder for segment {} camera...", segment_idx);
                 }
                 let cam_decoder_result = test_decoder(&cam_path, fps, true).await;
                 report.decoder_results.push(cam_decoder_result);
@@ -809,7 +817,7 @@ async fn run_tests_on_recording(
 
         if run_playback {
             if verbose {
-                println!("  Testing playback for segment {segment_idx}...");
+                println!("  Testing playback for segment {}...", segment_idx);
             }
             let playback_result =
                 test_playback(&meta, studio_meta.as_ref(), segment_idx, fps, verbose).await;
@@ -818,7 +826,7 @@ async fn run_tests_on_recording(
 
         if run_audio_sync {
             if verbose {
-                println!("  Testing audio sync for segment {segment_idx}...");
+                println!("  Testing audio sync for segment {}...", segment_idx);
             }
             let audio_result = test_audio_sync(&meta, studio_meta.as_ref(), segment_idx, fps).await;
             report.audio_sync_results.push(audio_result);
@@ -826,7 +834,7 @@ async fn run_tests_on_recording(
 
         if run_camera_sync && has_camera {
             if verbose {
-                println!("  Testing camera sync for segment {segment_idx}...");
+                println!("  Testing camera sync for segment {}...", segment_idx);
             }
             let camera_result =
                 test_camera_sync(&meta, studio_meta.as_ref(), segment_idx, fps).await;
@@ -854,7 +862,7 @@ fn print_summary(reports: &[RecordingTestReport]) {
     let passed = reports.iter().filter(|r| r.overall_passed).count();
     let total = reports.len();
 
-    println!("\nResults: {passed}/{total} recordings passed");
+    println!("\nResults: {}/{} recordings passed", passed, total);
 
     if passed < total {
         println!("\nFailed recordings:");
@@ -896,21 +904,24 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Commands::List) = cli.command {
-        let recordings = discover_recordings(&cli.input_dir);
-        if recordings.is_empty() {
-            println!("No recordings found in {}", cli.input_dir.display());
-        } else {
-            println!("Found {} recordings:", recordings.len());
-            for recording in recordings {
-                if let Ok(meta) = RecordingMeta::load_for_project(&recording) {
-                    println!("  - {} ({})", meta.pretty_name, recording.display());
-                } else {
-                    println!("  - {}", recording.display());
+    match cli.command {
+        Some(Commands::List) => {
+            let recordings = discover_recordings(&cli.input_dir);
+            if recordings.is_empty() {
+                println!("No recordings found in {}", cli.input_dir.display());
+            } else {
+                println!("Found {} recordings:", recordings.len());
+                for recording in recordings {
+                    if let Ok(meta) = RecordingMeta::load_for_project(&recording) {
+                        println!("  - {} ({})", meta.pretty_name, recording.display());
+                    } else {
+                        println!("  - {}", recording.display());
+                    }
                 }
             }
+            return Ok(());
         }
-        return Ok(());
+        _ => {}
     }
 
     let recordings = if let Some(path) = cli.recording_path {
@@ -969,7 +980,7 @@ async fn main() -> anyhow::Result<()> {
                 reports.push(report);
             }
             Err(e) => {
-                println!("  ERROR: {e}");
+                println!("  ERROR: {}", e);
             }
         }
     }

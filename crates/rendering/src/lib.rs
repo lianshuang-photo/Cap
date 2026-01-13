@@ -34,11 +34,10 @@ mod layers;
 mod mask;
 mod project_recordings;
 mod scene;
-pub mod spring_mass_damper;
+mod spring_mass_damper;
 mod text;
 pub mod yuv_converter;
 mod zoom;
-pub mod zoom_focus_interpolation;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
@@ -49,7 +48,6 @@ use mask::interpolate_masks;
 use scene::*;
 use text::{PreparedText, prepare_texts};
 use zoom::*;
-pub use zoom_focus_interpolation::ZoomFocusInterpolator;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
@@ -120,7 +118,6 @@ impl RecordingSegmentDecoders {
         meta: &StudioRecordingMeta,
         segment: SegmentVideoPaths,
         segment_i: usize,
-        force_ffmpeg: bool,
     ) -> Result<Self, String> {
         let latest_start_time = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => None,
@@ -149,7 +146,6 @@ impl RecordingSegmentDecoders {
                         .unwrap_or(0.0)
                 }
             },
-            force_ffmpeg,
         )
         .await
         .map_err(|e| format!("Screen:{e}"))?;
@@ -176,7 +172,6 @@ impl RecordingSegmentDecoders {
                             .unwrap_or(0.0)
                     }
                 },
-                force_ffmpeg,
             )
             .then(|r| async { r.map_err(|e| format!("Camera:{e}")) })
         }))
@@ -238,13 +233,6 @@ pub enum RenderingError {
     ImageLoadError(String),
     #[error("Error polling wgpu: {0}")]
     PollError(#[from] wgpu::PollError),
-    #[error(
-        "Failed to decode video frames. The recording may be corrupted or incomplete. Try re-recording or contact support if the issue persists."
-    )]
-    FrameDecodeFailed {
-        frame_number: u32,
-        consecutive_failures: u32,
-    },
 }
 
 pub struct RenderSegment {
@@ -272,27 +260,6 @@ pub async fn render_video_to_channel(
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
-    let cursor_smoothing =
-        (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
-            tension: project.cursor.tension,
-            mass: project.cursor.mass,
-            friction: project.cursor.friction,
-        });
-
-    let zoom_focus_interpolators: Vec<ZoomFocusInterpolator> = render_segments
-        .iter()
-        .map(|segment| {
-            let mut interp = ZoomFocusInterpolator::new(
-                &segment.cursor,
-                cursor_smoothing,
-                project.screen_movement_spring,
-                duration,
-            );
-            interp.precompute();
-            interp
-        })
-        .collect();
-
     let mut frame_number = 0;
 
     let mut frame_renderer = FrameRenderer::new(constants);
@@ -302,10 +269,6 @@ pub async fn render_video_to_channel(
         &constants.queue,
         constants.is_software_adapter,
     );
-
-    let mut last_successful_frame: Option<RenderedFrame> = None;
-    let mut consecutive_failures = 0u32;
-    const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
     loop {
         if frame_number >= total_frames {
@@ -323,146 +286,47 @@ pub async fn render_video_to_channel(
             .iter()
             .find(|v| v.index == segment.recording_clip);
 
-        let current_frame_number = {
+        let frame_number = {
             let prev = frame_number;
             std::mem::replace(&mut frame_number, prev + 1)
         };
 
         let render_segment = &render_segments[segment.recording_clip as usize];
 
-        let mut segment_frames = None;
-        let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3;
-
-        while segment_frames.is_none() && retry_count < MAX_RETRIES {
-            if retry_count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(50 * retry_count as u64)).await;
-            }
-
-            segment_frames = render_segment
-                .decoders
-                .get_frames(
-                    segment_time as f32,
-                    !project.camera.hide,
-                    clip_config.map(|v| v.offsets).unwrap_or_default(),
-                )
-                .await;
-
-            if segment_frames.is_none() {
-                retry_count += 1;
-                if retry_count < MAX_RETRIES {
-                    tracing::warn!(
-                        frame_number = current_frame_number,
-                        segment_time = segment_time,
-                        retry_count = retry_count,
-                        "Frame decode failed, retrying..."
-                    );
-                }
-            }
-        }
-
-        let frame = if let Some(segment_frames) = segment_frames {
-            consecutive_failures = 0;
-
-            let zoom_focus_interp = &zoom_focus_interpolators[segment.recording_clip as usize];
-
+        if let Some(segment_frames) = render_segment
+            .decoders
+            .get_frames(
+                segment_time as f32,
+                !project.camera.hide,
+                clip_config.map(|v| v.offsets).unwrap_or_default(),
+            )
+            .await
+        {
             let uniforms = ProjectUniforms::new(
                 constants,
                 project,
-                current_frame_number,
+                frame_number,
                 fps,
                 resolution_base,
                 &render_segment.cursor,
                 &segment_frames,
-                duration,
-                zoom_focus_interp,
             );
 
-            match frame_renderer
+            let frame = frame_renderer
                 .render(
                     segment_frames,
                     uniforms,
                     &render_segment.cursor,
                     &mut layers,
                 )
-                .await
-            {
-                Ok(frame) if frame.width > 0 && frame.height > 0 => {
-                    last_successful_frame = Some(frame.clone());
-                    frame
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        frame_number = current_frame_number,
-                        "Rendered frame has zero dimensions"
-                    );
-                    if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
-                    } else {
-                        continue;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        frame_number = current_frame_number,
-                        error = %e,
-                        "Frame rendering failed"
-                    );
-                    if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        fallback
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
-        } else {
-            consecutive_failures += 1;
+                .await?;
 
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                tracing::error!(
-                    frame_number = current_frame_number,
-                    consecutive_failures = consecutive_failures,
-                    "Too many consecutive frame failures - aborting export"
-                );
-                return Err(RenderingError::FrameDecodeFailed {
-                    frame_number: current_frame_number,
-                    consecutive_failures,
-                });
-            }
-
-            if let Some(ref last_frame) = last_successful_frame {
-                tracing::warn!(
-                    frame_number = current_frame_number,
-                    segment_time = segment_time,
-                    consecutive_failures = consecutive_failures,
-                    max_retries = MAX_RETRIES,
-                    "Frame decode failed after retries - using previous frame"
-                );
-                let mut fallback = last_frame.clone();
-                fallback.frame_number = current_frame_number;
-                fallback.target_time_ns =
-                    (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                fallback
-            } else {
-                tracing::error!(
-                    frame_number = current_frame_number,
-                    segment_time = segment_time,
-                    max_retries = MAX_RETRIES,
-                    "First frame decode failed after retries - cannot continue"
-                );
+            if frame.width == 0 || frame.height == 0 {
                 continue;
             }
-        };
 
-        sender.send((frame, current_frame_number)).await?;
+            sender.send((frame, frame_number)).await?;
+        }
     }
 
     let total_time = start_time.elapsed();
@@ -482,13 +346,14 @@ pub fn get_duration(
 ) -> f64 {
     let mut max_duration = recordings.duration();
 
-    if let Some(camera_path) = meta.camera_path()
-        && let Ok(camera_duration) =
+    if let Some(camera_path) = meta.camera_path() {
+        if let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
-    {
-        println!("Camera recording duration: {camera_duration}");
-        max_duration = max_duration.max(camera_duration);
-        println!("New max duration after camera check: {max_duration}");
+        {
+            println!("Camera recording duration: {camera_duration}");
+            max_duration = max_duration.max(camera_duration);
+            println!("New max duration after camera check: {max_duration}");
+        }
     }
 
     if let Some(timeline) = &project.timeline {
@@ -1099,11 +964,10 @@ impl ProjectUniforms {
         zoom: &InterpolatedZoom,
         scene: &InterpolatedScene,
         base_size: f32,
-        scale_during_zoom: f32,
+        zoom_size: f32,
     ) -> f32 {
         let t = zoom.t as f32;
-        let zoomed_size = base_size * scale_during_zoom;
-        let lerp = t * zoomed_size + (1.0 - t) * base_size;
+        let lerp = t * zoom_size * base_size + (1.0 - t) * base_size;
         lerp * scene.camera_scale as f32
     }
 
@@ -1121,7 +985,6 @@ impl ProjectUniforms {
         resolve_motion_descriptor(&analysis, base_amount, CAMERA_MULTIPLIER, CAMERA_MULTIPLIER)
     }
 
-    #[allow(dead_code)]
     fn auto_zoom_focus(
         cursor_events: &CursorEvents,
         time_secs: f32,
@@ -1220,7 +1083,6 @@ impl ProjectUniforms {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
@@ -1229,8 +1091,6 @@ impl ProjectUniforms {
         resolution_base: XY<u32>,
         cursor_events: &CursorEvents,
         segment_frames: &DecodedSegmentFrames,
-        total_duration: f64,
-        zoom_focus_interpolator: &ZoomFocusInterpolator,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -1243,28 +1103,9 @@ impl ProjectUniforms {
         };
         let current_recording_time = segment_frames.recording_time;
         let prev_recording_time = (segment_frames.recording_time - 1.0 / fps_f32).max(0.0);
-
-        let cursor_stop_time = project
-            .cursor
-            .stop_movement_in_last_seconds
-            .map(|seconds| (total_duration - seconds as f64).max(0.0) as f32);
-
-        let cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
-            current_recording_time.min(stop_time)
-        } else {
-            current_recording_time
-        };
-
-        let prev_cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
-            prev_recording_time.min(stop_time)
-        } else {
-            prev_recording_time
-        };
-
-        let cursor_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
-        let screen_motion_blur = project.screen_motion_blur.clamp(0.0, 1.0);
+        let user_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
         let has_previous = frame_number > 0;
-        let normalized_screen_motion = normalized_motion_amount(screen_motion_blur, fps_f32);
+        let normalized_motion = normalized_motion_amount(user_motion_blur, fps_f32);
 
         let crop = Self::get_crop(options, project);
 
@@ -1275,10 +1116,10 @@ impl ProjectUniforms {
         });
 
         let interpolated_cursor =
-            interpolate_cursor(cursor_events, cursor_time_for_interp, cursor_smoothing);
+            interpolate_cursor(cursor_events, current_recording_time, cursor_smoothing);
 
         let prev_interpolated_cursor =
-            interpolate_cursor(cursor_events, prev_cursor_time_for_interp, cursor_smoothing);
+            interpolate_cursor(cursor_events, prev_recording_time, cursor_smoothing);
 
         let zoom_segments = project
             .timeline
@@ -1292,28 +1133,28 @@ impl ProjectUniforms {
             .map(|t| t.scene_segments.as_slice())
             .unwrap_or(&[]);
 
-        let zoom_focus = zoom_focus_interpolator.interpolate(current_recording_time);
-
-        let prev_zoom_focus = zoom_focus_interpolator.interpolate(prev_recording_time);
-
-        let actual_cursor_coord = interpolated_cursor
-            .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
-
-        let prev_actual_cursor_coord = prev_interpolated_cursor
-            .as_ref()
-            .map(|c| Coord::<RawDisplayUVSpace>::new(c.position.coord));
-
-        let zoom = InterpolatedZoom::new_with_cursor(
-            SegmentsCursor::new(frame_time as f64, zoom_segments),
-            zoom_focus,
-            actual_cursor_coord,
+        let zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            current_recording_time,
+            cursor_smoothing,
+            interpolated_cursor.clone(),
         );
 
-        let prev_zoom = InterpolatedZoom::new_with_cursor(
+        let prev_zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            prev_recording_time,
+            cursor_smoothing,
+            prev_interpolated_cursor.clone(),
+        );
+
+        let zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(frame_time as f64, zoom_segments),
+            zoom_focus,
+        );
+
+        let prev_zoom = InterpolatedZoom::new(
             SegmentsCursor::new(prev_frame_time as f64, zoom_segments),
             prev_zoom_focus,
-            prev_actual_cursor_coord,
         );
 
         let scene =
@@ -1352,7 +1193,7 @@ impl ProjectUniforms {
                 MotionBounds::new(start, end),
                 MotionBounds::new(prev_start, prev_end),
                 has_previous,
-                normalized_screen_motion,
+                normalized_motion,
                 scene_blur_strength,
             );
             let descriptor = display_motion.descriptor;
@@ -1439,12 +1280,15 @@ impl ProjectUniforms {
                 let camera_padding = CAMERA_PADDING * resolution_scale;
 
                 let base_size = project.camera.size / 100.0;
-                let scale_during_zoom = project.camera.scale_during_zoom;
+                let zoom_size = project
+                    .camera
+                    .zoom_size
+                    .unwrap_or(cap_project::Camera::default_zoom_size())
+                    / 100.0;
 
-                let zoomed_size =
-                    Self::camera_zoom_factor(&zoom, &scene, base_size, scale_during_zoom);
+                let zoomed_size = Self::camera_zoom_factor(&zoom, &scene, base_size, zoom_size);
                 let prev_zoomed_size =
-                    Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, scale_during_zoom);
+                    Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, zoom_size);
 
                 let aspect = frame_size[0] / frame_size[1];
                 let camera_size_for = |scale: f32| match project.camera.shape {
@@ -1521,7 +1365,7 @@ impl ProjectUniforms {
                     current_bounds,
                     prev_bounds,
                     has_previous,
-                    normalized_screen_motion,
+                    normalized_motion,
                 );
 
                 let crop_bounds = match project.camera.shape {
@@ -1705,7 +1549,7 @@ impl ProjectUniforms {
             frame_number,
             prev_cursor: prev_interpolated_cursor,
             display_parent_motion_px: display_motion_parent,
-            motion_blur_amount: cursor_motion_blur,
+            motion_blur_amount: user_motion_blur,
             masks,
             texts,
         }

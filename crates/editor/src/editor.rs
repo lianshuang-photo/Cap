@@ -46,11 +46,13 @@ impl Renderer {
         )?);
         let mut max_duration = recordings.duration();
 
-        if let Some(camera_path) = meta.camera_path()
-            && let Ok(camera_duration) =
+        // Check camera duration if it exists
+        if let Some(camera_path) = meta.camera_path() {
+            if let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
-            max_duration = max_duration.max(camera_duration);
+            {
+                max_duration = max_duration.max(camera_duration);
+            }
         }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
@@ -142,7 +144,7 @@ impl Renderer {
                     break;
                 }
             }
-            match frame_renderer
+            let frame = frame_renderer
                 .render(
                     current.segment_frames,
                     current.uniforms,
@@ -150,14 +152,8 @@ impl Renderer {
                     &mut layers,
                 )
                 .await
-            {
-                Ok(frame) => {
-                    (self.frame_cb)(frame);
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to render frame in editor");
-                }
-            }
+                .unwrap();
+            (self.frame_cb)(frame);
 
             let _ = current.finished.send(());
         }
@@ -187,6 +183,7 @@ impl RendererHandle {
     }
 
     pub async fn stop(&self) {
+        // Send a stop message to the renderer
         let (tx, rx) = oneshot::channel();
         if self
             .tx
@@ -194,8 +191,9 @@ impl RendererHandle {
             .await
             .is_err()
         {
-            tracing::warn!("Failed to send stop message to renderer");
+            println!("Failed to send stop message to renderer");
         }
+        // Wait for the renderer to acknowledge the stop
         let _ = rx.await;
     }
 }

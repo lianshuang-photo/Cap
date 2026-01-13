@@ -2,23 +2,22 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
-import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
+import { t } from "~/components/I18nProvider";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
-	type EditorPreviewQuality,
 	FPS,
+	type PreviewQuality,
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
 import { preloadCropVideoFull } from "./cropVideoPreloader";
 import { MaskOverlay } from "./MaskOverlay";
-import { PerformanceOverlay } from "./PerformanceOverlay";
 import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
@@ -47,9 +46,9 @@ export function PlayerContent() {
 	} = useEditorContext();
 
 	const previewOptions = [
-		{ label: "Full", value: "full" as EditorPreviewQuality },
-		{ label: "Half", value: "half" as EditorPreviewQuality },
-		{ label: "Quarter", value: "quarter" as EditorPreviewQuality },
+		{ label: t("editor.player.qualities.full"), value: "full" as PreviewQuality },
+		{ label: t("editor.player.qualities.half"), value: "half" as PreviewQuality },
+		{ label: t("editor.player.qualities.quarter"), value: "quarter" as PreviewQuality },
 	];
 
 	// Load captions on mount
@@ -75,7 +74,22 @@ export function PlayerContent() {
 							end: segment.end,
 							text: segment.text,
 						})),
-						settings: { ...captionsStore.state.settings },
+						settings: {
+							enabled: captionsStore.state.settings.enabled,
+							font: captionsStore.state.settings.font,
+							size: captionsStore.state.settings.size,
+							color: captionsStore.state.settings.color,
+							backgroundColor: captionsStore.state.settings.backgroundColor,
+							backgroundOpacity: captionsStore.state.settings.backgroundOpacity,
+							position: captionsStore.state.settings.position,
+							italic: captionsStore.state.settings.italic,
+							outline: captionsStore.state.settings.outline,
+							outlineColor: captionsStore.state.settings.outlineColor,
+							exportWithSubtitles:
+								captionsStore.state.settings.exportWithSubtitles,
+							highlightColor: captionsStore.state.settings.highlightColor,
+							fadeDuration: captionsStore.state.settings.fadeDuration,
+						},
 					};
 
 					// Update the project with captions data
@@ -128,7 +142,7 @@ export function PlayerContent() {
 		setEditorState("playing", false);
 	};
 
-	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
+	const handlePreviewQualityChange = async (quality: PreviewQuality) => {
 		if (quality === previewQuality()) return;
 
 		const wasPlaying = editorState.playing;
@@ -242,18 +256,18 @@ export function PlayerContent() {
 				<div class="flex items-center gap-3">
 					<AspectRatioSelect />
 					<EditorButton
-						tooltipText="Crop Video"
+						tooltipText={t("editor.player.cropTooltip")}
 						onClick={cropDialogHandler}
 						onMouseEnter={preloadCropVideoFull}
 						onFocus={preloadCropVideoFull}
 						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 					>
-						Crop
+						{t("editor.player.crop")}
 					</EditorButton>
 				</div>
 				<div class="flex items-center gap-2">
-					<span class="text-xs font-medium text-gray-11">Preview quality</span>
-					<KSelect<{ label: string; value: EditorPreviewQuality }>
+					<span class="text-xs font-medium text-gray-11">{t("editor.player.quality")}</span>
+					<KSelect<{ label: string; value: PreviewQuality }>
 						options={previewOptions}
 						optionValue="value"
 						optionTextValue="label"
@@ -281,10 +295,10 @@ export function PlayerContent() {
 						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
 							<KSelect.Value<{
 								label: string;
-								value: EditorPreviewQuality;
+								value: PreviewQuality;
 							}> class="flex-1 text-left truncate">
 								{(state) =>
-									state.selectedOption()?.label ?? "Select preview quality"
+									state.selectedOption()?.label ?? t("editor.player.selectQuality")
 								}
 							</KSelect.Value>
 							<KSelect.Icon>
@@ -330,7 +344,7 @@ export function PlayerContent() {
 					>
 						<IconCapPrev class="text-gray-12 size-3" />
 					</button>
-					<Tooltip kbd={["Space"]} content="Play/Pause video">
+					<Tooltip kbd={["Space"]} content={t("editor.player.playPauseTooltip")}>
 						<button
 							type="button"
 							onClick={handlePlayPauseClick}
@@ -358,7 +372,7 @@ export function PlayerContent() {
 				<div class="flex flex-row flex-1 gap-4 justify-end items-center">
 					<div class="flex-1" />
 					<EditorButton<typeof KToggleButton>
-						tooltipText="Toggle Split"
+						tooltipText={t("editor.player.splitTooltip")}
 						kbd={["S"]}
 						pressed={editorState.timeline.interactMode === "split"}
 						onChange={(v: boolean) =>
@@ -377,7 +391,7 @@ export function PlayerContent() {
 						}
 					/>
 					<div class="w-px h-8 rounded-full bg-gray-4" />
-					<Tooltip kbd={["meta", "-"]} content="Zoom out">
+					<Tooltip kbd={["meta", "-"]} content={t("editor.player.zoomOutTooltip")}>
 						<IconCapZoomOut
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -388,7 +402,7 @@ export function PlayerContent() {
 							class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
 						/>
 					</Tooltip>
-					<Tooltip kbd={["meta", "+"]} content="Zoom in">
+					<Tooltip kbd={["meta", "+"]} content={t("editor.player.zoomInTooltip")}>
 						<IconCapZoomIn
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -420,9 +434,7 @@ export function PlayerContent() {
 							);
 						}}
 						formatTooltip={() =>
-							`${editorState.timeline.transform.zoom.toFixed(
-								0,
-							)} seconds visible`
+							t("editor.player.secondsVisible", { seconds: editorState.timeline.transform.zoom.toFixed(0) })
 						}
 					/>
 				</div>
@@ -444,24 +456,9 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
-		useEditorContext();
+	const { latestFrame, canvasControls } = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
-
-	const handleContextMenu = async (e: MouseEvent) => {
-		e.preventDefault();
-		const menu = await Menu.new({
-			items: [
-				{
-					id: "performance-mode",
-					text: performanceMode() ? "✓ Performance Mode" : "Performance Mode",
-					action: () => setPerformanceMode(!performanceMode()),
-				},
-			],
-		});
-		menu.popup();
-	};
 
 	const canvasInitializedRef = { current: false };
 	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
@@ -555,7 +552,6 @@ function PreviewCanvas() {
 			ref={setCanvasContainerRef}
 			class="relative flex-1 justify-center items-center"
 			style={{ contain: "layout style" }}
-			onContextMenu={handleContextMenu}
 		>
 			<div
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
@@ -583,7 +579,6 @@ function PreviewCanvas() {
 					<Show when={hasFrame()}>
 						<MaskOverlay size={size()} />
 						<TextOverlay size={size()} />
-						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>
 			</div>

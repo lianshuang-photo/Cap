@@ -1,4 +1,3 @@
-use cap_audio::estimate_input_latency;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
@@ -59,17 +58,17 @@ struct OpenState {
 
 impl OpenState {
     fn handle_input_connected(&mut self, data: InputConnected) {
-        if let Some(connecting) = &self.connecting
-            && data.id == connecting.id
-        {
-            self.attached = Some(AttachedState {
-                id: data.id,
-                label: data.label.clone(),
-                config: data.config.clone(),
-                buffer_size_frames: data.buffer_size_frames,
-                done_tx: data.done_tx,
-            });
-            self.connecting = None;
+        if let Some(connecting) = &self.connecting {
+            if data.id == connecting.id {
+                self.attached = Some(AttachedState {
+                    id: data.id,
+                    label: data.label.clone(),
+                    config: data.config.clone(),
+                    buffer_size_frames: data.buffer_size_frames,
+                    done_tx: data.done_tx,
+                });
+                self.connecting = None;
+            }
         }
     }
 }
@@ -319,16 +318,9 @@ const MIN_LATENCY_MS: u32 = 10;
 const MAX_LATENCY_MS: u32 = 120;
 const ABS_MIN_BUFFER_FRAMES: u32 = 128;
 
-const WIRELESS_TARGET_LATENCY_MS: u32 = 80;
-const WIRELESS_MIN_LATENCY_MS: u32 = 50;
-const WIRELESS_MAX_LATENCY_MS: u32 = 200;
-
-fn stream_config_with_latency(
-    config: &SupportedStreamConfig,
-    device_name: Option<&str>,
-) -> (cpal::StreamConfig, Option<u32>) {
+fn stream_config_with_latency(config: &SupportedStreamConfig) -> (cpal::StreamConfig, Option<u32>) {
     let mut stream_config: cpal::StreamConfig = config.clone().into();
-    let buffer_size_frames = desired_buffer_size_frames(config, device_name);
+    let buffer_size_frames = desired_buffer_size_frames(config);
 
     if let Some(frames) = buffer_size_frames {
         stream_config.buffer_size = BufferSize::Fixed(frames);
@@ -337,10 +329,7 @@ fn stream_config_with_latency(
     (stream_config, buffer_size_frames)
 }
 
-fn desired_buffer_size_frames(
-    config: &SupportedStreamConfig,
-    device_name: Option<&str>,
-) -> Option<u32> {
+fn desired_buffer_size_frames(config: &SupportedStreamConfig) -> Option<u32> {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
             let sample_rate = config.sample_rate().0;
@@ -349,26 +338,9 @@ fn desired_buffer_size_frames(
                 return None;
             }
 
-            let latency_info = estimate_input_latency(sample_rate, 1024, device_name);
-            let is_wireless = latency_info.transport.is_wireless();
-
-            let (target_ms, min_ms, max_ms) = if is_wireless {
-                info!(
-                    "Detected wireless microphone '{}', using extended buffer settings",
-                    device_name.unwrap_or("unknown")
-                );
-                (
-                    WIRELESS_TARGET_LATENCY_MS,
-                    WIRELESS_MIN_LATENCY_MS,
-                    WIRELESS_MAX_LATENCY_MS,
-                )
-            } else {
-                (TARGET_LATENCY_MS, MIN_LATENCY_MS, MAX_LATENCY_MS)
-            };
-
-            let desired = latency_ms_to_frames(sample_rate, target_ms);
-            let min_latency_frames = latency_ms_to_frames(sample_rate, min_ms);
-            let max_latency_frames = latency_ms_to_frames(sample_rate, max_ms);
+            let desired = latency_ms_to_frames(sample_rate, TARGET_LATENCY_MS);
+            let min_latency_frames = latency_ms_to_frames(sample_rate, MIN_LATENCY_MS);
+            let max_latency_frames = latency_ms_to_frames(sample_rate, MAX_LATENCY_MS);
 
             let desired = desired.clamp(min_latency_frames, max_latency_frames);
             let device_max = *max;
@@ -532,8 +504,7 @@ impl Message<SetInput> for MicrophoneFeed {
                 };
 
                 let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
+                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
 
                 let actor_ref = ctx.actor_ref();
                 let (ready_future, done_tx) = Self::spawn_input_stream(StreamSpawnParams {
@@ -616,8 +587,7 @@ impl Message<SetInput> for MicrophoneFeed {
                 };
 
                 let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
+                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
 
                 let new_id = self.input_id_counter;
                 self.input_id_counter += 1;
@@ -803,10 +773,10 @@ impl Message<InputConnectFailed> for MicrophoneFeed {
 
         let state = self.state.try_as_open()?;
 
-        if let Some(connecting) = &state.connecting
-            && connecting.id == msg.id
-        {
-            state.connecting = None;
+        if let Some(connecting) = &state.connecting {
+            if connecting.id == msg.id {
+                state.connecting = None;
+            }
         }
 
         Ok(())
@@ -821,13 +791,13 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
         msg: LockedInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state
-            && inner.label == msg.label
-        {
-            inner.id = msg.id;
-            inner.config = msg.config;
-            inner.buffer_size_frames = msg.buffer_size_frames;
-            inner.done_tx = msg.done_tx;
+        if let State::Locked { inner } = &mut self.state {
+            if inner.label == msg.label {
+                inner.id = msg.id;
+                inner.config = msg.config;
+                inner.buffer_size_frames = msg.buffer_size_frames;
+                inner.done_tx = msg.done_tx;
+            }
         }
     }
 }

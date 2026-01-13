@@ -101,7 +101,6 @@ async fn main() -> Result<()> {
                         .map(|c| recording_meta.path(&c.path)),
                 },
                 0,
-                false,
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create decoders for single segment: {}", e))?;
@@ -122,7 +121,6 @@ async fn main() -> Result<()> {
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
-                    false,
                 )
                 .await
                 .map_err(|e| {

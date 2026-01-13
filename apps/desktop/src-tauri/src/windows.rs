@@ -43,6 +43,7 @@ pub enum CapWindowId {
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
+    InstantPreview,  // 中文版：即时模式预览窗口
     WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
@@ -67,6 +68,7 @@ impl FromStr for CapWindowId {
             // legacy identifier
             "in-progress-recording" => Self::RecordingControls,
             "recordings-overlay" => Self::RecordingsOverlay,
+            "instant-preview" => Self::InstantPreview,  // 中文版：即时模式预览窗口
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
@@ -115,6 +117,7 @@ impl std::fmt::Display for CapWindowId {
             }
             Self::RecordingControls => write!(f, "in-progress-recording"), // legacy identifier
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
+            Self::InstantPreview => write!(f, "instant-preview"),  // 中文版：即时模式预览窗口
             Self::Upgrade => write!(f, "upgrade"),
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
@@ -141,6 +144,7 @@ impl CapWindowId {
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
+            Self::InstantPreview => "即时录制预览".to_string(),  // 中文版：即时模式预览窗口
             _ => "Cap".to_string(),
         }
     }
@@ -155,6 +159,7 @@ impl CapWindowId {
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
+                | Self::InstantPreview  // 中文版：即时模式预览窗口
         )
     }
 
@@ -189,6 +194,7 @@ impl CapWindowId {
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (580.0, 340.0),
+            Self::InstantPreview => (1000.0, 650.0),  // 中文版：即时模式预览窗口
             _ => return None,
         })
     }
@@ -224,6 +230,10 @@ pub enum ShowCapWindow {
     ModeSelect,
     ScreenshotEditor {
         path: PathBuf,
+    },
+    // 中文版：即时模式预览窗口
+    InstantPreview {
+        project_path: PathBuf,
     },
 }
 
@@ -315,6 +325,7 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
+                    .center()
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -324,13 +335,6 @@ impl ShowCapWindow {
                             .expect("Failed to serialize initial target mode")
                     ))
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center Main window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(target_os = "macos")]
                 crate::platform::set_window_level(window.as_ref().window(), 50);
@@ -433,15 +437,15 @@ impl ShowCapWindow {
             }
             Self::Settings { page } => {
                 for (label, window) in app.webview_windows() {
-                    if let Ok(id) = CapWindowId::from_str(&label)
-                        && matches!(
+                    if let Ok(id) = CapWindowId::from_str(&label) {
+                        if matches!(
                             id,
                             CapWindowId::TargetSelectOverlay { .. }
                                 | CapWindowId::Main
                                 | CapWindowId::Camera
-                        )
-                    {
-                        let _ = window.hide();
+                        ) {
+                            let _ = window.hide();
+                        }
                     }
                 }
 
@@ -454,14 +458,8 @@ impl ShowCapWindow {
                     .min_inner_size(600.0, 465.0)
                     .resizable(true)
                     .maximized(false)
+                    .center()
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center Settings window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(windows)]
                 {
@@ -484,24 +482,13 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                    .ok();
-
                 let window = self
                     .window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1275.0, 800.0)
                     .min_inner_size(1275.0, 800.0)
-                    .focused(true)
+                    .center()
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center Editor window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(windows)]
                 {
@@ -524,24 +511,13 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
-                #[cfg(target_os = "macos")]
-                app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                    .ok();
-
                 let window = self
                     .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .min_inner_size(800.0, 600.0)
-                    .focused(true)
+                    .center()
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center ScreenshotEditor window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(windows)]
                 {
@@ -573,14 +549,8 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .maximized(false)
                     .shadow(true)
+                    .center()
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center Upgrade window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(windows)]
                 {
@@ -607,16 +577,10 @@ impl ShowCapWindow {
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
+                    .center()
                     .focused(true)
                     .shadow(true)
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    if let Err(e) = window.center() {
-                        warn!("Failed to center ModeSelect window on macOS: {}", e);
-                    }
-                }
 
                 #[cfg(windows)]
                 {
@@ -678,20 +642,20 @@ impl ShowCapWindow {
 
                     let window = window_builder.build()?;
 
-                    if let Some(id) = state.selected_camera_id.clone()
-                        && !state.camera_in_use
-                    {
-                        match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
-                            Ok(ready_future) => {
-                                if let Err(err) = ready_future.await {
-                                    error!("Camera failed to initialize: {err}");
+                    if let Some(id) = state.selected_camera_id.clone() {
+                        if !state.camera_in_use {
+                            match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
+                                Ok(ready_future) => {
+                                    if let Err(err) = ready_future.await {
+                                        error!("Camera failed to initialize: {err}");
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("Failed to send SetInput to camera feed: {err}");
                                 }
                             }
-                            Err(err) => {
-                                error!("Failed to send SetInput to camera feed: {err}");
-                            }
+                            state.camera_in_use = true;
                         }
-                        state.camera_in_use = true;
                     }
 
                     if enable_native_camera_preview {
@@ -819,13 +783,16 @@ impl ShowCapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app)
-                    && let (Ok(outer_pos), Ok(outer_size)) =
+                if let Some(main_window) = CapWindowId::Main.get(app) {
+                    if let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                    && let Ok(scale_factor) = main_window.scale_factor()
-                    && display.intersects(outer_pos, outer_size, scale_factor)
-                {
-                    let _ = main_window.minimize();
+                    {
+                        if let Ok(scale_factor) = main_window.scale_factor() {
+                            if display.intersects(outer_pos, outer_size, scale_factor) {
+                                let _ = main_window.minimize();
+                            }
+                        }
+                    }
                 };
 
                 window
@@ -977,7 +944,45 @@ impl ShowCapWindow {
                     .ok();
                 }
 
+                // 中文版：Windows 平台需要显式调用 show() 显示窗口
+                #[cfg(windows)]
+                {
+                    window.show().ok();
+                }
+
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+
+                window
+            }
+            // 中文版：即时模式预览窗口
+            Self::InstantPreview { project_path } => {
+                let title = CapWindowId::InstantPreview.title();
+                let should_protect = should_protect_window(app, &title);
+
+                let window = self
+                    .window_builder(app, "/instant-preview")
+                    .resizable(true)
+                    .maximizable(true)
+                    .center()
+                    .focused(true)
+                    .content_protected(should_protect)
+                    .initialization_script(format!(
+                        "window.__CAP_INSTANT_PROJECT_PATH__ = {:?};",
+                        project_path.to_string_lossy()
+                    ))
+                    .build()?;
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(1000.0, 650.0)) {
+                        warn!("Failed to set InstantPreview window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center InstantPreview window on Windows: {}", e);
+                    }
+                    window.show().ok();
+                }
 
                 window
             }
@@ -1055,6 +1060,7 @@ impl ShowCapWindow {
                 CapWindowId::Editor { id }
             }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::InstantPreview { .. } => CapWindowId::InstantPreview,  // 中文版
             ShowCapWindow::TargetSelectOverlay { display_id } => CapWindowId::TargetSelectOverlay {
                 display_id: display_id.clone(),
             },

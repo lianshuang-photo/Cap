@@ -22,7 +22,6 @@ const CURSOR_MIN_MOTION_PX: f32 = 1.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
 const CURSOR_MULTIPLIER: f32 = 3.0;
 const CURSOR_MAX_STRENGTH: f32 = 5.0;
-const VELOCITY_BLEND_RATIO: f32 = 0.7;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -269,35 +268,21 @@ impl CursorLayer {
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
         let parent_motion = uniforms.display_parent_motion_px;
-        let child_motion = {
-            let delta_motion = uniforms
-                .prev_cursor
-                .as_ref()
-                .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
-                .map(|prev| {
-                    let delta_uv = XY::new(
-                        (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
-                        (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
-                    );
-                    XY::new(
-                        delta_uv.x * screen_size.x as f32,
-                        delta_uv.y * screen_size.y as f32,
-                    )
-                })
-                .unwrap_or_else(|| XY::new(0.0, 0.0));
-
-            let spring_velocity = XY::new(
-                interpolated_cursor.velocity.x * screen_size.x as f32 / fps,
-                interpolated_cursor.velocity.y * screen_size.y as f32 / fps,
-            );
-
-            XY::new(
-                delta_motion.x * (1.0 - VELOCITY_BLEND_RATIO)
-                    + spring_velocity.x * VELOCITY_BLEND_RATIO,
-                delta_motion.y * (1.0 - VELOCITY_BLEND_RATIO)
-                    + spring_velocity.y * VELOCITY_BLEND_RATIO,
-            )
-        };
+        let child_motion = uniforms
+            .prev_cursor
+            .as_ref()
+            .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
+            .map(|prev| {
+                let delta_uv = XY::new(
+                    (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
+                    (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
+                );
+                XY::new(
+                    delta_uv.x * screen_size.x as f32,
+                    delta_uv.y * screen_size.y as f32,
+                )
+            })
+            .unwrap_or_else(|| XY::new(0.0, 0.0));
 
         let combined_motion_px = if cursor_strength <= f32::EPSILON {
             XY::new(0.0, 0.0)
@@ -371,35 +356,39 @@ impl CursorLayer {
                     _ => None,
                 };
 
-                if let Some(cursor_shape) = cursor_shape
-                    && uniforms.project.cursor.use_svg
-                    && let Some(info) = cursor_shape.resolve()
-                {
-                    loaded_cursor =
-                        CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
-                            .map_err(|err| {
-                                error!(
-                                    "Error loading SVG cursor {:?}: {err}",
-                                    interpolated_cursor.cursor_id
-                                )
-                            })
-                            .ok();
+                if let Some(cursor_shape) = cursor_shape {
+                    if uniforms.project.cursor.use_svg {
+                        if let Some(info) = cursor_shape.resolve() {
+                            loaded_cursor =
+                                CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
+                                    .map_err(|err| {
+                                        error!(
+                                            "Error loading SVG cursor {:?}: {err}",
+                                            interpolated_cursor.cursor_id
+                                        )
+                                    })
+                                    .ok();
+                        }
+                    }
                 }
 
-                if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
-                    && loaded_cursor.is_none()
-                    && let Some(c) = inner
-                        .get_cursor_image(&constants.recording_meta, &interpolated_cursor.cursor_id)
-                    && let Ok(img) = image::open(&c.path).map_err(|err| {
-                        error!("Failed to load cursor image from {:?}: {err}", c.path)
-                    })
-                {
-                    loaded_cursor = Some(CursorTexture::prepare(
-                        constants,
-                        &img.to_rgba8(),
-                        img.dimensions(),
-                        c.hotspot,
-                    ));
+                if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta {
+                    if loaded_cursor.is_none() {
+                        if let Some(c) = inner
+                            .get_cursor_image(&constants.recording_meta, &interpolated_cursor.cursor_id)
+                        {
+                            if let Ok(img) = image::open(&c.path).map_err(|err| {
+                                error!("Failed to load cursor image from {:?}: {err}", c.path)
+                            }) {
+                                loaded_cursor = Some(CursorTexture::prepare(
+                                    constants,
+                                    &img.to_rgba8(),
+                                    img.dimensions(),
+                                    c.hotspot,
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 if let Some(c) = loaded_cursor {
@@ -493,12 +482,6 @@ impl CursorLayer {
                 effective_strength,
                 cursor_opacity,
             ],
-            rotation_params: [
-                uniforms.project.cursor.rotation_amount,
-                uniforms.project.cursor.base_rotation,
-                0.0,
-                0.0,
-            ],
         };
 
         constants.queue.write_buffer(
@@ -556,7 +539,6 @@ pub struct CursorUniforms {
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
     motion_vector_strength: [f32; 4],
-    rotation_params: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(
@@ -664,16 +646,14 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
         );
     }
 
-    if let Some(next) = clicks.get(prev_i + 1)
-        && !prev.down
-        && next.down
-        && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS
-    {
-        return smoothstep(
-            0.0,
-            CURSOR_CLICK_DURATION_MS as f32,
-            (time_ms - next.time_ms).abs() as f32,
-        );
+    if let Some(next) = clicks.get(prev_i + 1) {
+        if !prev.down && next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
+            return smoothstep(
+                0.0,
+                CURSOR_CLICK_DURATION_MS as f32,
+                (time_ms - next.time_ms).abs() as f32,
+            );
+        }
     }
 
     1.0

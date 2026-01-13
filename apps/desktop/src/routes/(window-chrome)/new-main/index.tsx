@@ -33,6 +33,7 @@ import { authStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createDevicesQuery } from "~/utils/devices";
+import { t } from "~/components/I18nProvider";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
@@ -63,7 +64,6 @@ import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
 import IconLucideBug from "~icons/lucide/bug";
 import IconLucideImage from "~icons/lucide/image";
-import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
@@ -135,31 +135,31 @@ const createDisplaySignature = (
 
 type TargetMenuPanelProps =
 	| {
-			variant: "display";
-			targets?: CaptureDisplayWithThumbnail[];
-			onSelect: (target: CaptureDisplayWithThumbnail) => void;
-	  }
+		variant: "display";
+		targets?: CaptureDisplayWithThumbnail[];
+		onSelect: (target: CaptureDisplayWithThumbnail) => void;
+	}
 	| {
-			variant: "window";
-			targets?: CaptureWindowWithThumbnail[];
-			onSelect: (target: CaptureWindowWithThumbnail) => void;
-	  }
+		variant: "window";
+		targets?: CaptureWindowWithThumbnail[];
+		onSelect: (target: CaptureWindowWithThumbnail) => void;
+	}
 	| {
-			variant: "recording";
-			targets?: RecordingWithPath[];
-			onSelect: (target: RecordingWithPath) => void;
-			onViewAll: () => void;
-			uploadProgress?: Record<string, number>;
-			reuploadingPaths?: Set<string>;
-			onReupload?: (path: string) => void;
-			onRefetch?: () => void;
-	  }
+		variant: "recording";
+		targets?: RecordingWithPath[];
+		onSelect: (target: RecordingWithPath) => void;
+		onViewAll: () => void;
+		uploadProgress?: Record<string, number>;
+		reuploadingPaths?: Set<string>;
+		onReupload?: (path: string) => void;
+		onRefetch?: () => void;
+	}
 	| {
-			variant: "screenshot";
-			targets?: ScreenshotWithPath[];
-			onSelect: (target: ScreenshotWithPath) => void;
-			onViewAll: () => void;
-	  };
+		variant: "screenshot";
+		targets?: ScreenshotWithPath[];
+		onSelect: (target: ScreenshotWithPath) => void;
+		onViewAll: () => void;
+	};
 
 type SharedTargetMenuProps = {
 	isLoading: boolean;
@@ -174,46 +174,20 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
 	const placeholder =
 		props.variant === "display"
-			? "Search displays"
+			? t("recording.search.displays")
 			: props.variant === "window"
-				? "Search windows"
+				? t("recording.search.windows")
 				: props.variant === "recording"
-					? "Search recordings"
-					: "Search screenshots";
+					? t("recording.search.recordings")
+					: t("recording.search.screenshots");
 	const noResultsMessage =
 		props.variant === "display"
-			? "No matching displays"
+			? t("recording.search.noDisplays")
 			: props.variant === "window"
-				? "No matching windows"
+				? t("recording.search.noWindows")
 				: props.variant === "recording"
-					? "No matching recordings"
-					: "No matching screenshots";
-
-	const handleImport = async () => {
-		const result = await dialog.open({
-			filters: [
-				{
-					name: "Video Files",
-					extensions: ["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
-				},
-			],
-			multiple: false,
-		});
-
-		if (result) {
-			try {
-				const projectPath = await commands.startVideoImport(result as string);
-				await commands.showWindow({ Editor: { project_path: projectPath } });
-				getCurrentWindow().hide();
-			} catch (e) {
-				console.error("Failed to import video:", e);
-				await dialog.message(
-					`Failed to import video: ${e instanceof Error ? e.message : String(e)}`,
-					{ title: "Import Error", kind: "error" },
-				);
-			}
-		}
-	};
+					? t("recording.search.noRecordings")
+					: t("recording.search.noScreenshots");
 
 	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
 		() => {
@@ -282,41 +256,28 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">{t('common.back')}</span>
 				</div>
-				<div class="flex gap-2 flex-1 min-w-0">
-					<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
-						<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
-						<Input
-							type="search"
-							class="py-2 pl-6 h-full w-full"
-							value={search()}
-							onInput={(event) => setSearch(event.currentTarget.value)}
-							onKeyDown={(event) => {
-								if (event.key === "Escape" && search()) {
-									event.preventDefault();
-									setSearch("");
-								}
-							}}
-							placeholder={placeholder}
-							autoCapitalize="off"
-							autocorrect="off"
-							autocomplete="off"
-							spellcheck={false}
-							aria-label={placeholder}
-						/>
-					</div>
-					<Show when={props.variant === "recording"}>
-						<Button
-							variant="gray"
-							size="sm"
-							class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
-							onClick={handleImport}
-						>
-							<IconLucideImport class="size-3.5" />
-							<span>Import</span>
-						</Button>
-					</Show>
+				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
+					<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+					<Input
+						type="search"
+						class="py-2 pl-6 h-full"
+						value={search()}
+						onInput={(event) => setSearch(event.currentTarget.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Escape" && search()) {
+								event.preventDefault();
+								setSearch("");
+							}
+						}}
+						placeholder={placeholder}
+						autoCapitalize="off"
+						autocorrect="off"
+						autocomplete="off"
+						spellcheck={false}
+						aria-label={placeholder}
+					/>
 				</div>
 			</div>
 			<div class="flex flex-col flex-1 min-h-0 pt-4">
@@ -398,31 +359,17 @@ function createUpdateCheck() {
 
 		await new Promise((res) => setTimeout(res, 1000));
 
-		let update: updater.Update | undefined;
-		try {
-			const result = await updater.check();
-			if (result) update = result;
-		} catch (e) {
-			console.error("Failed to check for updates:", e);
-			await dialog.message(
-				"Unable to check for updates. Please download the latest version manually from cap.so/download. Your data will not be lost.\n\nIf this issue persists, please contact support.",
-				{ title: "Update Error", kind: "error" },
-			);
-			return;
-		}
-
+		const update = await updater.check();
 		if (!update) return;
 
-		let shouldUpdate: boolean | undefined;
-		try {
-			shouldUpdate = await dialog.confirm(
-				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
-			);
-		} catch (e) {
-			console.error("Failed to show update dialog:", e);
-			return;
-		}
+		const shouldUpdate = await dialog.confirm(
+			t("app.update.message", { version: update.version }),
+			{
+				title: t("app.update.title"),
+				okLabel: t("app.update.ok"),
+				cancelLabel: t("app.update.ignore"),
+			},
+		);
 
 		if (!shouldUpdate) return;
 		navigate("/update");
@@ -522,7 +469,7 @@ function Page() {
 			await commands.uploadExportedVideo(
 				path,
 				"Reupload",
-				new Channel<UploadProgress>(() => {}),
+				new Channel<UploadProgress>(() => { }),
 				null,
 			);
 		} finally {
@@ -627,12 +574,12 @@ function Page() {
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
-		return "Unable to load displays. Try using the Display button.";
+		return t("recording.search.errorLoadingDisplays");
 	};
 
 	const windowErrorMessage = () => {
 		if (!windowTargets.error) return undefined;
-		return "Unable to load windows. Try using the Window button.";
+		return t("recording.search.errorLoadingWindows");
 	};
 
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
@@ -919,7 +866,7 @@ function Page() {
 						class={cx(
 							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
 							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-								"ring-blue-9",
+							"ring-blue-9",
 						)}
 					>
 						<TargetTypeButton
@@ -927,7 +874,7 @@ function Page() {
 							Component={IconMdiMonitor}
 							disabled={isRecording()}
 							onClick={() => toggleTargetMode("display")}
-							name="Display"
+							name={t("modes.screen")}
 							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
 						/>
 						<TargetDropdownButton
@@ -951,14 +898,14 @@ function Page() {
 								});
 							}}
 							aria-haspopup="menu"
-							aria-label="Choose display"
+							aria-label={t("actions.chooseDisplay")}
 						/>
 					</div>
 					<div
 						class={cx(
 							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
 							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-								"ring-blue-9",
+							"ring-blue-9",
 						)}
 					>
 						<TargetTypeButton
@@ -966,7 +913,7 @@ function Page() {
 							Component={IconLucideAppWindowMac}
 							disabled={isRecording()}
 							onClick={() => toggleTargetMode("window")}
-							name="Window"
+							name={t("modes.window")}
 							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
 						/>
 						<TargetDropdownButton
@@ -990,7 +937,7 @@ function Page() {
 								});
 							}}
 							aria-haspopup="menu"
-							aria-label="Choose window"
+							aria-label={t("actions.chooseWindow")}
 						/>
 					</div>
 					<TargetTypeButton
@@ -998,7 +945,7 @@ function Page() {
 						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
 						disabled={isRecording()}
 						onClick={() => toggleTargetMode("area")}
-						name="Area"
+						name={t("modes.screen")} // Area also uses screen label or similar
 					/>
 				</div>
 				<BaseControls />
@@ -1014,7 +961,7 @@ function Page() {
 			}
 		}
 
-		await signIn.mutateAsync(abort).catch(() => {});
+		await signIn.mutateAsync(abort).catch(() => { });
 
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
@@ -1038,7 +985,7 @@ function Page() {
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
-						<Tooltip content={<span>Settings</span>}>
+						<Tooltip content={<span>{t("settings.general")}</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -1050,7 +997,7 @@ function Page() {
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Screenshots</span>}>
+						<Tooltip content={<span>{t("settings.screenshots")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -1069,7 +1016,7 @@ function Page() {
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Recordings</span>}>
+						<Tooltip content={<span>{t("settings.recordings")}</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -1121,29 +1068,7 @@ function Page() {
 							<IconCapLogoFullDark class="hidden dark:block" />
 							<IconCapLogoFull class="block dark:hidden" />
 						</a>
-						<ErrorBoundary fallback={null}>
-							<Suspense>
-								<span
-									onClick={async () => {
-										if (license.data?.type !== "pro") {
-											await commands.showWindow("Upgrade");
-										}
-									}}
-									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
-										license.data?.type === "pro"
-											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
-									)}
-								>
-									{license.data?.type === "commercial"
-										? "Commercial"
-										: license.data?.type === "pro"
-											? "Pro"
-											: "Personal"}
-								</span>
-							</Suspense>
-						</ErrorBoundary>
+						{/* License badge hidden for local use */}
 					</div>
 					<Mode
 						onInfoClick={() => {
@@ -1157,24 +1082,7 @@ function Page() {
 				</div>
 			</Show>
 			<div class="flex-1 min-h-0 w-full flex flex-col">
-				<Show when={signIn.isPending}>
-					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
-						<div class="flex flex-col gap-4 justify-center items-center">
-							<span>Signing In...</span>
-
-							<Button
-								onClick={() => {
-									signIn.variables?.abort();
-									signIn.reset();
-								}}
-								variant="gray"
-								class="w-full"
-							>
-								Cancel Sign In
-							</Button>
-						</div>
-					</div>
-				</Show>
+				{/* Sign-in pending UI hidden for local use */}
 				<Show when={!signIn.isPending}>
 					<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
 						{(variant) =>
@@ -1210,7 +1118,7 @@ function Page() {
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
 									errorMessage={
-										recordings.error ? "Failed to load recordings" : undefined
+										recordings.error ? t("recordingsPage.status.loadFailed") : undefined
 									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
@@ -1260,7 +1168,7 @@ function Page() {
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
 									errorMessage={
-										screenshots.error ? "Failed to load screenshots" : undefined
+										screenshots.error ? t("screenshot.messages.loadFailed") : undefined
 									}
 									onSelect={async (screenshot) => {
 										await commands.showWindow({

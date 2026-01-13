@@ -6,7 +6,7 @@ use cap_media_info::AudioInfo;
 use cpal::SampleFormat;
 use futures::{SinkExt, channel::mpsc};
 use kameo::error::SendError;
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, future::Future, sync::Arc};
 use thiserror::Error;
 
 const MICROPHONE_TARGET_CHANNELS: u16 = 1;
@@ -41,7 +41,7 @@ impl AudioSource for Microphone {
             let audio_info = source_info.with_max_channels(MICROPHONE_TARGET_CHANNELS);
             let source_channels = source_info.channels;
             let target_channels = audio_info.channels;
-            let (tx, rx) = flume::bounded(32);
+            let (tx, rx) = flume::bounded(8);
 
             feed_lock
                 .ask(microphone::AddSender(tx))

@@ -35,7 +35,6 @@ pub enum TrayItem {
     RecordDisplay,
     RecordWindow,
     RecordArea,
-    ImportVideo,
     ViewAllRecordings,
     ViewAllScreenshots,
     OpenSettings,
@@ -55,7 +54,6 @@ impl From<TrayItem> for MenuId {
             TrayItem::RecordDisplay => "record_display",
             TrayItem::RecordWindow => "record_window",
             TrayItem::RecordArea => "record_area",
-            TrayItem::ImportVideo => "import_video",
             TrayItem::ViewAllRecordings => "view_all_recordings",
             TrayItem::ViewAllScreenshots => "view_all_screenshots",
             TrayItem::OpenSettings => "open_settings",
@@ -88,7 +86,6 @@ impl TryFrom<MenuId> for TrayItem {
             "record_display" => Ok(TrayItem::RecordDisplay),
             "record_window" => Ok(TrayItem::RecordWindow),
             "record_area" => Ok(TrayItem::RecordArea),
-            "import_video" => Ok(TrayItem::ImportVideo),
             "view_all_recordings" => Ok(TrayItem::ViewAllRecordings),
             "view_all_screenshots" => Ok(TrayItem::ViewAllScreenshots),
             "open_settings" => Ok(TrayItem::OpenSettings),
@@ -251,25 +248,25 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
     let screenshots_dir = screenshots_path(app);
 
     let recordings_dir = recordings_path(app);
-    if recordings_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&recordings_dir)
-    {
-        for entry in entries.flatten() {
-            if let Some(item) = load_single_item(&entry.path(), &screenshots_dir, load_thumbnails) {
-                items.push(item);
+    if recordings_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&recordings_dir) {
+            for entry in entries.flatten() {
+                if let Some(item) = load_single_item(&entry.path(), &screenshots_dir, load_thumbnails) {
+                    items.push(item);
+                }
             }
         }
     }
 
-    if screenshots_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&screenshots_dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("cap")
-                && let Some(item) = load_single_item(&path, &screenshots_dir, load_thumbnails)
-            {
-                items.push(item);
+    if screenshots_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&screenshots_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                    if let Some(item) = load_single_item(&path, &screenshots_dir, load_thumbnails) {
+                        items.push(item);
+                    }
+                }
             }
         }
     }
@@ -369,7 +366,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                 &MenuItem::with_id(
                     app,
                     TrayItem::RequestPermissions,
-                    "Request Permissions",
+                    "请求权限",
                     true,
                     None::<&str>,
                 )?,
@@ -381,7 +378,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                     false,
                     None::<&str>,
                 )?,
-                &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
+                &MenuItem::with_id(app, TrayItem::Quit, "退出 Cap", true, None::<&str>)?,
             ],
         );
     }
@@ -395,32 +392,25 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
             &MenuItem::with_id(
                 app,
                 TrayItem::OpenCap,
-                "Open Main Window",
+                "打开主窗口",
                 true,
                 None::<&str>,
             )?,
             &MenuItem::with_id(
                 app,
                 TrayItem::RecordDisplay,
-                "Record Display",
+                "录制屏幕",
                 true,
                 None::<&str>,
             )?,
             &MenuItem::with_id(
                 app,
                 TrayItem::RecordWindow,
-                "Record Window",
+                "录制窗口",
                 true,
                 None::<&str>,
             )?,
-            &MenuItem::with_id(app, TrayItem::RecordArea, "Record Area", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::ImportVideo,
-                "Import Video...",
-                true,
-                None::<&str>,
-            )?,
+            &MenuItem::with_id(app, TrayItem::RecordArea, "录制区域", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &mode_submenu,
             &previous_submenu,
@@ -428,20 +418,20 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
             &MenuItem::with_id(
                 app,
                 TrayItem::ViewAllRecordings,
-                "View all recordings",
+                "查看所有录制",
                 true,
                 None::<&str>,
             )?,
             &MenuItem::with_id(
                 app,
                 TrayItem::ViewAllScreenshots,
-                "View all screenshots",
+                "查看所有截图",
                 true,
                 None::<&str>,
             )?,
-            &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::OpenSettings, "设置", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, TrayItem::UploadLogs, "Upload Logs", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::UploadLogs, "上传日志", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 "version",
@@ -449,7 +439,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
                 false,
                 None::<&str>,
             )?,
-            &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::Quit, "退出 Cap", true, None::<&str>)?,
         ],
     )
 }
@@ -629,43 +619,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         target_mode: Some(RecordingTargetMode::Area),
                     }
                     .emit(&app_handle);
-                }
-                Ok(TrayItem::ImportVideo) => {
-                    let app = app.clone();
-                    tokio::spawn(async move {
-                        let file_path = app
-                            .dialog()
-                            .file()
-                            .add_filter(
-                                "Video Files",
-                                &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
-                            )
-                            .blocking_pick_file();
-
-                        if let Some(file_path) = file_path {
-                            let path = match file_path.into_path() {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    tracing::error!("Invalid file path: {e}");
-                                    return;
-                                }
-                            };
-
-                            match crate::import::start_video_import(app.clone(), path).await {
-                                Ok(project_path) => {
-                                    let _ = ShowCapWindow::Editor { project_path }.show(&app).await;
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to import video: {e}");
-                                    app.dialog()
-                                        .message(format!("Failed to import video: {e}"))
-                                        .title("Import Error")
-                                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
-                                        .blocking_show();
-                                }
-                            }
-                        }
-                    });
                 }
                 Ok(TrayItem::ViewAllRecordings) => {
                     let _ = RequestOpenSettings {

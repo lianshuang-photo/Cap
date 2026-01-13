@@ -58,6 +58,7 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import { t } from "~/components/I18nProvider";
 import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
 import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
 import {
@@ -253,14 +254,13 @@ function Inner() {
 								<div class="flex flex-col items-center text-white">
 									<IconCapMonitor class="size-20 mb-3" />
 									<span class="mb-2 text-3xl font-semibold">
-										{display.name || "Monitor"}
+										{display.name || t('targetSelect.monitor')}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs">
-												{`${size().width}x${size().height} · ${
-													display.refresh_rate
-												}FPS`}
+												{`${size().width}x${size().height} · ${display.refresh_rate
+													}FPS`}
 											</span>
 										)}
 									</Show>
@@ -384,7 +384,7 @@ function Inner() {
 										commands.openTargetSelectOverlays(null);
 									}}
 								>
-									Adjust recording area
+									{t('targetSelect.adjustArea')}
 								</Button>
 								<ShowCapFreeWarning
 									isInstantMode={options.mode === "instant"}
@@ -611,7 +611,7 @@ function Inner() {
 						e.preventDefault();
 						const items = [
 							{
-								text: "Reset selection",
+								text: t('targetSelect.resetSelection'),
 								action: () => {
 									cropperRef?.reset();
 									setAspect(null);
@@ -803,13 +803,12 @@ function Inner() {
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
 											<p>
-												Minimum size is {minSize().width} x {minSize().height}
+												{t('targetSelect.minSize', { width: minSize().width, height: minSize().height })}
 											</p>
 											<small>
 												<code>
-													{crop().width} x {crop().height}
+													{t('targetSelect.tooSmall', { width: crop().width, height: crop().height })}
 												</code>{" "}
-												is too small
 											</small>
 										</div>
 									</Show>
@@ -848,7 +847,6 @@ function RecordingControls(props: {
 	disabled?: boolean;
 	onRecordingStart?: () => void;
 }) {
-	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
@@ -878,7 +876,7 @@ function RecordingControls(props: {
 		await Menu.new({
 			items: [
 				await CheckMenuItem.new({
-					text: "Studio Mode",
+					text: t('targetSelect.modes.studio'),
 					action: () => {
 						setOptions("mode", "studio");
 						commands.setRecordingMode("studio");
@@ -886,7 +884,7 @@ function RecordingControls(props: {
 					checked: rawOptions.mode === "studio",
 				}),
 				await CheckMenuItem.new({
-					text: "Instant Mode",
+					text: t('targetSelect.modes.instant'),
 					action: () => {
 						setOptions("mode", "instant");
 						commands.setRecordingMode("instant");
@@ -894,7 +892,7 @@ function RecordingControls(props: {
 					checked: rawOptions.mode === "instant",
 				}),
 				await CheckMenuItem.new({
-					text: "Screenshot Mode",
+					text: t('targetSelect.modes.screenshot'),
 					action: () => {
 						setOptions("mode", "screenshot");
 						commands.setRecordingMode("screenshot");
@@ -906,24 +904,24 @@ function RecordingControls(props: {
 
 	const countdownItems = async () => [
 		await CheckMenuItem.new({
-			text: "Off",
+			text: t('targetSelect.countdown.off'),
 			action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
 			checked:
 				!generalSetings.data?.recordingCountdown ||
 				generalSetings.data?.recordingCountdown === 0,
 		}),
 		await CheckMenuItem.new({
-			text: "3 seconds",
+			text: t('targetSelect.countdown.3s'),
 			action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
 			checked: generalSetings.data?.recordingCountdown === 3,
 		}),
 		await CheckMenuItem.new({
-			text: "5 seconds",
+			text: t('targetSelect.countdown.5s'),
 			action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
 			checked: generalSetings.data?.recordingCountdown === 5,
 		}),
 		await CheckMenuItem.new({
-			text: "10 seconds",
+			text: t('targetSelect.countdown.10s'),
 			action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
 			checked: generalSetings.data?.recordingCountdown === 10,
 		}),
@@ -933,7 +931,7 @@ function RecordingControls(props: {
 		return await Menu.new({
 			items: [
 				await MenuItem.new({
-					text: "Recording Countdown",
+					text: t('targetSelect.countdown.title'),
 					enabled: false,
 				}),
 				...(await countdownItems()),
@@ -964,14 +962,9 @@ function RecordingControls(props: {
 							<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
 						</div>
 						<div
-							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
 							class="flex flex-1 min-w-0 max-w-[18rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
 							onClick={async () => {
-								if (rawOptions.mode === "instant" && !auth.data) {
-									emit("start-sign-in");
-									return;
-								}
 								if (startDisabled()) return;
 
 								if (props.target.variant === "area") {
@@ -1039,11 +1032,9 @@ function RecordingControls(props: {
 								<div class="flex flex-col mr-2 ml-3 min-w-0">
 									<span class="text-[0.95rem] font-medium text-white text-nowrap">
 										{(() => {
-											if (rawOptions.mode === "instant" && !auth.data)
-												return "Sign In To Use";
 											if (rawOptions.mode === "screenshot")
-												return "Take Screenshot";
-											return "Start Recording";
+												return t('targetSelect.actions.takeScreenshot');
+											return t('targetSelect.actions.startRecording');
 										})()}
 									</span>
 									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
@@ -1106,8 +1097,7 @@ function RecordingControls(props: {
 				>
 					<IconCapInfo class="opacity-70 will-change-transform size-3" />
 					<p class="text-sm text-white drop-shadow-md">
-						<span class="opacity-70">What is </span>
-						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+						{t('targetSelect.whatIsMode', { mode: t(`targetSelect.modes.${rawOptions.mode}` as any) })}
 					</p>
 				</div>
 			</div>
@@ -1116,21 +1106,6 @@ function RecordingControls(props: {
 }
 
 function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
-	const auth = authStore.createQuery();
-
-	return (
-		<Suspense>
-			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
-					Instant Mode recordings are limited to 5 mins,{" "}
-					<button
-						class="underline"
-						onClick={() => commands.showWindow("Upgrade")}
-					>
-						Upgrade to Pro
-					</button>
-				</p>
-			</Show>
-		</Suspense>
-	);
+	// 中文版已移除付费限制，不显示升级提示
+	return null;
 }

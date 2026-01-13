@@ -1,7 +1,7 @@
 [package]
 name = "cap-export"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 cap-utils = { path = "../utils" }
@@ -35,7 +35,6 @@ clap = { version = "4.5.41", features = ["derive"] }
 directories = "6.0.0"
 inquire = "0.7.5"
 tokio.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

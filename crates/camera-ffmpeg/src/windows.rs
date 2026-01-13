@@ -103,12 +103,12 @@ impl H264Decoder {
     }
 
     pub fn flush(&mut self) -> Result<Vec<FFVideo>, AsFFmpegError> {
-        if let Err(e) = self.decoder.send_eof()
-            && !matches!(e, ffmpeg::Error::Eof)
-        {
-            return Err(AsFFmpegError::H264DecodeError(format!(
-                "Failed to send EOF: {e}"
-            )));
+        if let Err(e) = self.decoder.send_eof() {
+            if !matches!(e, ffmpeg::Error::Eof) {
+                return Err(AsFFmpegError::H264DecodeError(format!(
+                    "Failed to send EOF: {e}"
+                )));
+            }
         }
 
         self.drain_frames()?;
@@ -198,16 +198,11 @@ pub fn reset_h264_decoder() {
     });
 }
 
-fn src_y(y: usize, height: usize, is_bottom_up: bool) -> usize {
-    if is_bottom_up { height - y - 1 } else { y }
-}
-
 impl CapturedFrameExt for CapturedFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let native = self.native();
         let width = native.width;
         let height = native.height;
-        let is_bottom_up = native.is_bottom_up;
 
         if width == 0 || height == 0 {
             return Err(AsFFmpegError::Empty);
@@ -224,30 +219,32 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::YUV420P, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
                 let stride = ff_frame.stride(1);
-                let half_height = height / 2;
-                for y in 0..half_height {
+
+                for y in 0..height / 2 {
                     let row_width = width / 2;
-                    let src_row =
-                        &bytes[width * height + src_y(y, half_height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[width * height + y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
                 let stride = ff_frame.stride(2);
-                for y in 0..half_height {
+
+                for y in 0..height / 2 {
                     let row_width = width / 2;
-                    let src_row = &bytes[width * height
-                        + width * height / 4
-                        + src_y(y, half_height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[width * height + width * height / 4 + y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(2)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -258,18 +255,20 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * width..];
+                    let src_row = &bytes[y * width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..width].copy_from_slice(&src_row[0..width]);
                 }
 
                 let stride = ff_frame.stride(1);
-                let uv_base = &bytes[width * height..];
-                let half_height = height / 2;
-                for y in 0..half_height {
+                let src_row = &bytes[width * height..];
+
+                for y in 0..height / 2 {
                     let row_width = width;
-                    let src_row = &uv_base[src_y(y, half_height, is_bottom_up) * row_width..];
+                    let src_row = &src_row[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -279,10 +278,12 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::BGRA, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width * 4;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[(height - y - 1) * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -293,9 +294,11 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 let src_stride = width * 3;
+
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * src_stride..];
+                    let src_row = &bytes[(height - y - 1) * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
 
@@ -305,10 +308,12 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::BGRA, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width * 4;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[(height - y - 1) * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -318,10 +323,12 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::YUYV422, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width * 2;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -331,10 +338,12 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::UYVY422, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width * 2;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
 
@@ -347,7 +356,7 @@ impl CapturedFrameExt for CapturedFrame {
                 let stride = ff_frame.stride(0);
                 for y in 0..height {
                     let row_width = width;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
@@ -356,13 +365,11 @@ impl CapturedFrameExt for CapturedFrame {
                 let u_offset = v_offset + (width / 2) * (height / 2);
                 let stride_u = ff_frame.stride(1);
                 let stride_v = ff_frame.stride(2);
-                let half_height = height / 2;
 
-                for y in 0..half_height {
+                for y in 0..height / 2 {
                     let row_width = width / 2;
-                    let sy = src_y(y, half_height, is_bottom_up);
-                    let src_v = &bytes[v_offset + sy * row_width..];
-                    let src_u = &bytes[u_offset + sy * row_width..];
+                    let src_v = &bytes[v_offset + y * row_width..];
+                    let src_u = &bytes[u_offset + y * row_width..];
                     ff_frame.data_mut(1)[y * stride_u..][0..row_width]
                         .copy_from_slice(&src_u[0..row_width]);
                     ff_frame.data_mut(2)[y * stride_v..][0..row_width]
@@ -376,8 +383,9 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 let src_stride = width * 3;
+
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * src_stride..];
+                    let src_row = &bytes[(height - y - 1) * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
@@ -388,9 +396,10 @@ impl CapturedFrameExt for CapturedFrame {
                 let mut ff_frame = FFVideo::new(Pixel::GRAY8, width as u32, height as u32);
 
                 let stride = ff_frame.stride(0);
+
                 for y in 0..height {
                     let row_width = width;
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * row_width..];
+                    let src_row = &bytes[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
                 }
@@ -402,8 +411,9 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 let src_stride = width * 2;
+
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * src_stride..];
+                    let src_row = &bytes[y * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
@@ -415,18 +425,17 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * width..];
+                    let src_row = &bytes[y * width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..width].copy_from_slice(&src_row[0..width]);
                 }
 
                 let stride = ff_frame.stride(1);
                 let src_uv = &bytes[width * height..];
-                let half_height = height / 2;
 
-                for y in 0..half_height {
+                for y in 0..height / 2 {
                     let row_width = width;
-                    let src_row = &src_uv[src_y(y, half_height, is_bottom_up) * row_width..];
+                    let src_row = &src_uv[y * row_width..];
                     let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
                     for x in 0..width / 2 {
                         dest_row[x * 2] = src_row[x * 2 + 1];
@@ -441,8 +450,9 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 let src_stride = width * 2;
+
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * src_stride..];
+                    let src_row = &bytes[(height - y - 1) * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
@@ -454,8 +464,9 @@ impl CapturedFrameExt for CapturedFrame {
 
                 let stride = ff_frame.stride(0);
                 let src_stride = width * 2;
+
                 for y in 0..height {
-                    let src_row = &bytes[src_y(y, height, is_bottom_up) * src_stride..];
+                    let src_row = &bytes[y * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
@@ -463,11 +474,9 @@ impl CapturedFrameExt for CapturedFrame {
                 let stride = ff_frame.stride(1);
                 let uv_offset = width * height * 2;
                 let src_stride = width * 2;
-                let half_height = height / 2;
 
-                for y in 0..half_height {
-                    let src_row =
-                        &bytes[uv_offset + src_y(y, half_height, is_bottom_up) * src_stride..];
+                for y in 0..height / 2 {
+                    let src_row = &bytes[uv_offset + y * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }

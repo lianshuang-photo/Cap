@@ -1,12 +1,8 @@
 use cpal::{
-    BufferSize, InputCallbackInfo, PauseStreamError, PlayStreamError, Stream, StreamConfig,
-    StreamError, SupportedBufferSize, traits::StreamTrait,
+    InputCallbackInfo, PauseStreamError, PlayStreamError, Stream, StreamConfig, StreamError,
+    traits::StreamTrait,
 };
 use thiserror::Error;
-
-const DEFAULT_BUFFER_FRAMES: u32 = 4096;
-const MIN_BUFFER_FRAMES: u32 = 256;
-const MAX_BUFFER_FRAMES: u32 = 16384;
 
 #[derive(Clone, Error, Debug)]
 pub enum CapturerError {
@@ -16,25 +12,6 @@ pub enum CapturerError {
     DefaultConfig(String),
     #[error("BuildStream: {0}")]
     BuildStream(String),
-}
-
-fn safe_buffer_size(supported: &SupportedBufferSize, sample_rate: u32) -> BufferSize {
-    match supported {
-        SupportedBufferSize::Range { min, max } => {
-            let target_frames = if sample_rate > 0 {
-                let target_ms = 80u64;
-                let frames = (sample_rate as u64 * target_ms) / 1000;
-                frames.clamp(MIN_BUFFER_FRAMES as u64, MAX_BUFFER_FRAMES as u64) as u32
-            } else {
-                DEFAULT_BUFFER_FRAMES
-            };
-
-            let clamped = target_frames.clamp(*min, *max);
-
-            BufferSize::Fixed(clamped)
-        }
-        SupportedBufferSize::Unknown => BufferSize::Default,
-    }
 }
 
 pub fn create_capturer(
@@ -50,14 +27,7 @@ pub fn create_capturer(
     let supported_config = output_device
         .default_output_config()
         .map_err(|e| CapturerError::DefaultConfig(e.to_string()))?;
-
-    let buffer_size = safe_buffer_size(
-        supported_config.buffer_size(),
-        supported_config.sample_rate().0,
-    );
-
-    let mut config: StreamConfig = supported_config.clone().into();
-    config.buffer_size = buffer_size;
+    let config = supported_config.clone().into();
 
     let stream = output_device
         .build_input_stream_raw(

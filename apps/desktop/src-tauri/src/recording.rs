@@ -3,10 +3,10 @@ use cap_fail::fail;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta,
-    ZoomMode, ZoomSegment, cursor::CursorEvents,
+    CameraShape, CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
+    StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode,
+    ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
@@ -81,7 +81,7 @@ pub enum InProgressRecording {
     Instant {
         handle: instant_recording::ActorHandle,
         progressive_upload: InstantMultipartUpload,
-        video_upload_info: VideoUploadInfo,
+        video_upload_info: Option<VideoUploadInfo>,  // 中文版：改为 Option 以支持未登录用户
         common: InProgressRecordingCommon,
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
@@ -258,7 +258,7 @@ pub enum CompletedRecording {
         recording: instant_recording::CompletedRecording,
         target_name: String,
         progressive_upload: InstantMultipartUpload,
-        video_upload_info: VideoUploadInfo,
+        video_upload_info: Option<VideoUploadInfo>,  // 中文版：改为 Option 以支持未登录用户
     },
     Studio {
         recording: studio_recording::CompletedRecording,
@@ -532,11 +532,8 @@ pub async fn start_recording(
                         config: s3_config,
                     })
                 }
-                // Allow the recording to proceed without error for any signed-in user
-                _ => {
-                    // User is not signed in
-                    return Err("Please sign in to use instant recording".to_string());
-                }
+                // 中文版：允许未登录用户使用即时模式（本地录制）
+                _ => None,
             }
         }
         RecordingMode::Studio => None,
@@ -778,9 +775,8 @@ pub async fn start_recording(
                             })
                         }
                         RecordingMode::Instant => {
-                            let Some(video_upload_info) = video_upload_info.clone() else {
-                                return Err(anyhow!("Video upload info not found"));
-                            };
+                            // 中文版：允许未登录用户使用即时模式（本地录制，不上传）
+                            let video_upload_info_opt = video_upload_info.clone();
 
                             let mut builder = instant_recording::Actor::builder(
                                 recording_dir.clone(),
@@ -814,18 +810,24 @@ pub async fn start_recording(
                                     e
                                 })?;
 
-                            let progressive_upload = InstantMultipartUpload::spawn(
-                                app_handle.clone(),
-                                recording_dir.join("content/output.mp4"),
-                                video_upload_info.clone(),
-                                recording_dir.clone(),
-                                Some(finish_upload_rx.clone()),
-                            );
+                            // 只有在有上传信息时才启动上传
+                            let progressive_upload = if let Some(ref upload_info) = video_upload_info_opt {
+                                InstantMultipartUpload::spawn(
+                                    app_handle.clone(),
+                                    recording_dir.join("content/output.mp4"),
+                                    upload_info.clone(),
+                                    recording_dir.clone(),
+                                    Some(finish_upload_rx.clone()),
+                                )
+                            } else {
+                                // 未登录时不上传，创建一个空的上传任务
+                                InstantMultipartUpload::spawn_dummy()
+                            };
 
                             Ok(InProgressRecording::Instant {
                                 handle,
                                 progressive_upload,
-                                video_upload_info,
+                                video_upload_info: video_upload_info_opt,
                                 common: common.clone(),
                                 camera_feed: camera_feed.clone(),
                             })
@@ -1108,13 +1110,18 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
                 progressive_upload,
                 ..
             } => {
-                debug!(
-                    "User deleted recording. Aborting multipart upload for {:?}",
-                    video_upload_info.id
-                );
-                progressive_upload.handle.abort();
-
-                Some(video_upload_info.id.clone())
+                // 中文版：只有在有上传信息时才中止上传
+                if let Some(upload_info) = video_upload_info {
+                    debug!(
+                        "User deleted recording. Aborting multipart upload for {:?}",
+                        upload_info.id
+                    );
+                    progressive_upload.handle.abort();
+                    Some(upload_info.id.clone())
+                } else {
+                    progressive_upload.handle.abort();
+                    None
+                }
             }
             _ => None,
         };
@@ -1543,111 +1550,130 @@ async fn handle_recording_finish(
                 None,
             ));
 
-            let _ = open_external_link(app.clone(), video_upload_info.link.clone());
+            // 中文版：只有在有上传信息时才打开链接和上传
+            if let Some(ref upload_info) = video_upload_info {
+                let _ = open_external_link(app.clone(), upload_info.link.clone());
 
-            spawn_actor({
-                let video_upload_info = video_upload_info.clone();
-                let recording_dir = recording_dir.clone();
+                spawn_actor({
+                    let video_upload_info = upload_info.clone();
+                    let recording_dir = recording_dir.clone();
 
-                async move {
-                    let video_upload_succeeded = match progressive_upload
-                        .handle
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r.map_err(|v| v.to_string()))
-                    {
-                        Ok(()) => {
-                            info!(
-                                "Not attempting instant recording upload as progressive upload succeeded"
-                            );
-                            true
-                        }
-                        Err(e) => {
-                            error!("Progressive upload failed: {}", e);
-                            false
-                        }
-                    };
+                    async move {
+                        let video_upload_succeeded = match progressive_upload
+                            .handle
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r.map_err(|v| v.to_string()))
+                        {
+                            Ok(()) => {
+                                info!(
+                                    "Not attempting instant recording upload as progressive upload succeeded"
+                                );
+                                true
+                            }
+                            Err(e) => {
+                                error!("Progressive upload failed: {}", e);
+                                false
+                            }
+                        };
 
-                    let _ = screenshot_task.await;
+                        let _ = screenshot_task.await;
 
-                    if video_upload_succeeded {
-                        if let Ok(bytes) =
-                            compress_image(display_screenshot).await
-                            .map_err(|err|
-                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
-                            ) {
-                                let res = crate::upload::singlepart_uploader(
-                                    app.clone(),
-                                    crate::api::PresignedS3PutRequest {
-                                        video_id: video_upload_info.id.clone(),
-                                        subpath: "screenshot/screen-capture.jpg".to_string(),
-                                        method: PresignedS3PutRequestMethod::Put,
-                                        meta: None,
-                                    },
-                                    bytes.len() as u64,
-                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-                                )
-                                .await;
-                                if let Err(err) = res {
-	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
-	                                return;
+                        if video_upload_succeeded {
+                            if let Ok(bytes) =
+                                compress_image(display_screenshot).await
+                                .map_err(|err|
+                                    error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                                ) {
+                                    let res = crate::upload::singlepart_uploader(
+                                        app.clone(),
+                                        crate::api::PresignedS3PutRequest {
+                                            video_id: video_upload_info.id.clone(),
+                                            subpath: "screenshot/screen-capture.jpg".to_string(),
+                                            method: PresignedS3PutRequestMethod::Put,
+                                            meta: None,
+                                        },
+                                        bytes.len() as u64,
+                                        stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
+                                    )
+                                    .await;
+                                    if let Err(err) = res {
+                                        error!("Error updating thumbnail for instant mode progressive upload: {err}");
+                                        return;
+                                    }
+
+                                    if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload {
+                                            if let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
+                                                error!("Failed to remove recording files after upload: {err:?}");
+                                            }
+                                        }
+
                                 }
+                        } else if let Ok(meta) = build_video_meta(&output_path)
+                            .map_err(|err| error!("Error getting video metadata: {}", err))
+                        {
+                            // The upload_video function handles screenshot upload, so we can pass it along
+                            upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                display_screenshot.clone(),
+                                meta,
+                                None,
+                            )
+                            .await
+                            .map(|_| info!("Final video upload with screenshot completed successfully"))
+                            .map_err(|error| {
+                                error!("Error in upload_video: {error}");
 
-                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
-	                                	error!("Failed to remove recording files after upload: {err:?}");
-	                                }
-
-                            }
-                    } else if let Ok(meta) = build_video_meta(&output_path)
-                        .map_err(|err| error!("Error getting video metadata: {}", err))
-                    {
-                        // The upload_video function handles screenshot upload, so we can pass it along
-                        upload_video(
-                            &app,
-                            video_upload_info.id.clone(),
-                            output_path,
-                            display_screenshot.clone(),
-                            meta,
-                            None,
-                        )
-                        .await
-                        .map(|_| info!("Final video upload with screenshot completed successfully"))
-                        .map_err(|error| {
-                            error!("Error in upload_video: {error}");
-
-                            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                                meta.upload = Some(UploadMeta::Failed {
-                                    error: error.to_string(),
-                                });
-                                meta.save_for_project()
-                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
-                                    .ok();
-                            }
-                        })
-                        .ok();
+                                if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                                    meta.upload = Some(UploadMeta::Failed {
+                                        error: error.to_string(),
+                                    });
+                                    meta.save_for_project()
+                                        .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                        .ok();
+                                }
+                            })
+                            .ok();
+                        }
                     }
-                }
-            });
+                });
 
-            (
-                RecordingMetaInner::Instant(recording.meta),
-                Some(SharingMeta {
-                    link: video_upload_info.link,
-                    id: video_upload_info.id,
-                }),
-            )
+                (
+                    RecordingMetaInner::Instant(recording.meta),
+                    Some(SharingMeta {
+                        link: upload_info.link.clone(),
+                        id: upload_info.id.clone(),
+                    }),
+                )
+            } else {
+                // 中文版：未登录用户，不上传，直接保存本地
+                let _ = screenshot_task.await;
+                progressive_upload.handle.abort();
+                
+                // 中文版：录制完成后打开即时模式预览窗口
+                let _ = ShowCapWindow::InstantPreview { 
+                    project_path: recording_dir.clone() 
+                }.show(&app).await;
+                
+                (
+                    RecordingMetaInner::Instant(recording.meta),
+                    None,
+                )
+            }
         }
     };
 
-    if let RecordingMetaInner::Instant(_) = &meta_inner
-        && let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+    if let RecordingMetaInner::Instant(_) = &meta_inner {
+        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             error!("Failed to load recording meta while saving finished recording: {err}")
-        })
-    {
-        meta.inner = meta_inner.clone();
-        meta.sharing = sharing;
-        meta.save_for_project()
-            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+        }) {
+            meta.inner = meta_inner.clone();
+            meta.sharing = sharing;
+            meta.save_for_project()
+                .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+        }
     }
 
     if let RecordingMetaInner::Studio(_) = meta_inner {
@@ -1760,26 +1786,24 @@ fn generate_zoom_segments_from_clicks_impl(
     mut moves: Vec<CursorMoveEvent>,
     max_duration: f64,
 ) -> Vec<ZoomSegment> {
-    const STOP_PADDING_SECONDS: f64 = 0.5;
-    const CLICK_GROUP_TIME_THRESHOLD_SECS: f64 = 2.5;
-    const CLICK_GROUP_SPATIAL_THRESHOLD: f64 = 0.15;
-    const CLICK_PRE_PADDING: f64 = 0.4;
-    const CLICK_POST_PADDING: f64 = 1.8;
-    const MOVEMENT_PRE_PADDING: f64 = 0.3;
-    const MOVEMENT_POST_PADDING: f64 = 1.5;
-    const MERGE_GAP_THRESHOLD: f64 = 0.8;
-    const MIN_SEGMENT_DURATION: f64 = 1.0;
-    const MOVEMENT_WINDOW_SECONDS: f64 = 1.5;
-    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.02;
-    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.08;
+    const STOP_PADDING_SECONDS: f64 = 0.8;
+    const CLICK_PRE_PADDING: f64 = 0.6;
+    const CLICK_POST_PADDING: f64 = 1.6;
+    const MOVEMENT_PRE_PADDING: f64 = 0.4;
+    const MOVEMENT_POST_PADDING: f64 = 1.2;
+    const MERGE_GAP_THRESHOLD: f64 = 0.6;
+    const MIN_SEGMENT_DURATION: f64 = 1.3;
+    const MOVEMENT_WINDOW_SECONDS: f64 = 1.2;
+    const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.025;
+    const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.1;
     const AUTO_ZOOM_AMOUNT: f64 = 1.5;
-    const SHAKE_FILTER_THRESHOLD: f64 = 0.33;
-    const SHAKE_FILTER_WINDOW_MS: f64 = 150.0;
 
     if max_duration <= 0.0 {
         return Vec::new();
     }
 
+    // We trim the tail of the recording to avoid using the final
+    // "stop recording" click as a zoom target.
     let activity_end_limit = if max_duration > STOP_PADDING_SECONDS {
         max_duration - STOP_PADDING_SECONDS
     } else {
@@ -1801,6 +1825,7 @@ fn generate_zoom_segments_from_clicks_impl(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Remove trailing click-down events that are too close to the end.
     while let Some(index) = clicks.iter().rposition(|c| c.down) {
         let time_secs = clicks[index].time_ms / 1000.0;
         if time_secs > activity_end_limit {
@@ -1810,77 +1835,16 @@ fn generate_zoom_segments_from_clicks_impl(
         }
     }
 
-    let click_positions: HashMap<usize, (f64, f64)> = clicks
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.down)
-        .filter_map(|(idx, click)| {
-            let click_time = click.time_ms;
-            moves
-                .iter()
-                .rfind(|m| m.time_ms <= click_time)
-                .map(|m| (idx, (m.x, m.y)))
-        })
-        .collect();
-
-    let mut click_groups: Vec<Vec<usize>> = Vec::new();
-    let down_clicks: Vec<(usize, &CursorClickEvent)> = clicks
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.down && c.time_ms / 1000.0 < activity_end_limit)
-        .collect();
-
-    for (idx, click) in &down_clicks {
-        let click_time = click.time_ms / 1000.0;
-        let click_pos = click_positions.get(idx);
-
-        let mut found_group = false;
-        for group in click_groups.iter_mut() {
-            let can_join = group.iter().any(|&group_idx| {
-                let group_click = &clicks[group_idx];
-                let group_time = group_click.time_ms / 1000.0;
-                let time_close = (click_time - group_time).abs() < CLICK_GROUP_TIME_THRESHOLD_SECS;
-
-                let spatial_close = match (click_pos, click_positions.get(&group_idx)) {
-                    (Some((x1, y1)), Some((x2, y2))) => {
-                        let dx = x1 - x2;
-                        let dy = y1 - y2;
-                        (dx * dx + dy * dy).sqrt() < CLICK_GROUP_SPATIAL_THRESHOLD
-                    }
-                    _ => true,
-                };
-
-                time_close && spatial_close
-            });
-
-            if can_join {
-                group.push(*idx);
-                found_group = true;
-                break;
-            }
-        }
-
-        if !found_group {
-            click_groups.push(vec![*idx]);
-        }
-    }
-
     let mut intervals: Vec<(f64, f64)> = Vec::new();
 
-    for group in click_groups {
-        if group.is_empty() {
+    for click in clicks.into_iter().filter(|c| c.down) {
+        let time = click.time_ms / 1000.0;
+        if time >= activity_end_limit {
             continue;
         }
 
-        let times: Vec<f64> = group
-            .iter()
-            .map(|&idx| clicks[idx].time_ms / 1000.0)
-            .collect();
-        let group_start = times.iter().cloned().fold(f64::INFINITY, f64::min);
-        let group_end = times.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-        let start = (group_start - CLICK_PRE_PADDING).max(0.0);
-        let end = (group_end + CLICK_POST_PADDING).min(activity_end_limit);
+        let start = (time - CLICK_PRE_PADDING).max(0.0);
+        let end = (time + CLICK_POST_PADDING).min(activity_end_limit);
 
         if end > start {
             intervals.push((start, end));
@@ -1890,7 +1854,6 @@ fn generate_zoom_segments_from_clicks_impl(
     let mut last_move_by_cursor: HashMap<String, (f64, f64, f64)> = HashMap::new();
     let mut distance_window: VecDeque<(f64, f64)> = VecDeque::new();
     let mut window_distance = 0.0_f64;
-    let mut shake_window: VecDeque<(f64, f64, f64)> = VecDeque::new();
 
     for mv in moves.iter() {
         let time = mv.time_ms / 1000.0;
@@ -1910,40 +1873,6 @@ fn generate_zoom_segments_from_clicks_impl(
 
         if distance <= f64::EPSILON {
             continue;
-        }
-
-        shake_window.push_back((mv.time_ms, mv.x, mv.y));
-        while let Some(&(old_time, _, _)) = shake_window.front() {
-            if mv.time_ms - old_time > SHAKE_FILTER_WINDOW_MS {
-                shake_window.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if shake_window.len() >= 3 {
-            let positions: Vec<(f64, f64)> =
-                shake_window.iter().map(|(_, x, y)| (*x, *y)).collect();
-            let mut direction_changes = 0;
-            for i in 1..positions.len() - 1 {
-                let dx1 = positions[i].0 - positions[i - 1].0;
-                let dy1 = positions[i].1 - positions[i - 1].1;
-                let dx2 = positions[i + 1].0 - positions[i].0;
-                let dy2 = positions[i + 1].1 - positions[i].1;
-
-                if (dx1 * dx2 + dy1 * dy2) < 0.0 {
-                    direction_changes += 1;
-                }
-            }
-
-            let total_dist: f64 = positions
-                .windows(2)
-                .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
-                .sum();
-
-            if direction_changes >= 2 && total_dist < SHAKE_FILTER_THRESHOLD * 3.0 {
-                continue;
-            }
         }
 
         distance_window.push_back((time, distance));
@@ -1985,11 +1914,11 @@ fn generate_zoom_segments_from_clicks_impl(
 
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for interval in intervals {
-        if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_THRESHOLD
-        {
-            last.1 = last.1.max(interval.1);
-            continue;
+        if let Some(last) = merged.last_mut() {
+            if interval.0 <= last.1 + MERGE_GAP_THRESHOLD {
+                last.1 = last.1.max(interval.1);
+                continue;
+            }
         }
         merged.push(interval);
     }
@@ -2007,10 +1936,6 @@ fn generate_zoom_segments_from_clicks_impl(
                 end,
                 amount: AUTO_ZOOM_AMOUNT,
                 mode: ZoomMode::Auto,
-                glide_direction: GlideDirection::None,
-                glide_speed: 0.5,
-                instant_animation: false,
-                edge_snap_ratio: 0.25,
             })
         })
         .collect()

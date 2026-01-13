@@ -1,0 +1,69 @@
+name: "Build CN Version (macOS ARM)"
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
+
+jobs:
+  build-macos-arm:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version number
+        uses: SebRollen/toml-action@v1.0.2
+        id: read_version
+        with:
+          file: ${{ env.APP_CARGO_TOML }}
+          field: "package.version"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./apps/desktop/src-tauri -> target"
+          cache-all-crates: "true"
+          key: v3-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Create .env file
+        run: |
+          echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
+          echo "VITE_ENVIRONMENT=production" >> .env
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: |
+          pnpm -w cap-setup
+          pnpm tauri build --target aarch64-apple-darwin
+        env:
+          CI: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cap-CN-macOS-ARM-${{ steps.read_version.outputs.value }}
+          path: target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: warn

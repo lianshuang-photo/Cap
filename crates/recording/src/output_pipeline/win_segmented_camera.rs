@@ -1,4 +1,4 @@
-use crate::output_pipeline::win::{CameraBuffers, NativeCameraFrame, upload_mf_buffer_to_texture};
+use crate::output_pipeline::win::{NativeCameraFrame, upload_mf_buffer_to_texture};
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -221,10 +221,10 @@ impl Muxer for WindowsSegmentedCameraMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.current_state
-            && let Err(e) = state.video_tx.send(None)
-        {
-            trace!("Camera encoder channel already closed during stop: {e}");
+        if let Some(state) = &self.current_state {
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Camera encoder channel already closed during stop: {e}");
+            }
         }
     }
 
@@ -512,7 +512,6 @@ impl WindowsSegmentedCameraMuxer {
                         );
 
                         let mut first_timestamp: Option<Duration> = None;
-                        let mut camera_buffers = CameraBuffers::new();
 
                         let result = encoder.run(
                             Arc::new(AtomicBool::default()),
@@ -529,7 +528,7 @@ impl WindowsSegmentedCameraMuxer {
                                     Duration::ZERO
                                 };
 
-                                let texture = upload_mf_buffer_to_texture(&d3d_device, &frame, &mut camera_buffers)?;
+                                let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
                                 Ok(Some((texture, duration_to_timespan(relative))))
                             },
                             |output_sample| {
@@ -609,10 +608,10 @@ impl WindowsSegmentedCameraMuxer {
                             }
                         }
 
-                        if let Ok(mut output_guard) = output_clone.lock()
-                            && let Err(e) = encoder.flush(&mut output_guard)
-                        {
-                            warn!("Failed to flush software encoder: {e}");
+                        if let Ok(mut output_guard) = output_clone.lock() {
+                            if let Err(e) = encoder.flush(&mut output_guard) {
+                                warn!("Failed to flush software encoder: {e}");
+                            }
                         }
 
                         Ok(())
@@ -787,15 +786,15 @@ impl VideoMuxer for WindowsSegmentedCameraMuxer {
             self.rotate_segment(adjusted_timestamp, &frame)?;
         }
 
-        if let Some(state) = &self.current_state
-            && let Err(e) = state.video_tx.try_send(Some((frame, adjusted_timestamp)))
-        {
-            match e {
-                std::sync::mpsc::TrySendError::Full(_) => {
-                    self.frame_drops.record_drop();
-                }
-                std::sync::mpsc::TrySendError::Disconnected(_) => {
-                    trace!("Camera encoder channel disconnected");
+        if let Some(state) = &self.current_state {
+            if let Err(e) = state.video_tx.try_send(Some((frame, adjusted_timestamp))) {
+                match e {
+                    std::sync::mpsc::TrySendError::Full(_) => {
+                        self.frame_drops.record_drop();
+                    }
+                    std::sync::mpsc::TrySendError::Disconnected(_) => {
+                        trace!("Camera encoder channel disconnected");
+                    }
                 }
             }
         }

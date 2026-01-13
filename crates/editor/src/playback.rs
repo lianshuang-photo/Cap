@@ -4,10 +4,7 @@ use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latenc
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{
-    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, ZoomFocusInterpolator,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
-};
+use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
 #[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
 use cpal::{
@@ -136,21 +133,13 @@ impl Playback {
         let prefetch_stop_rx = stop_rx.clone();
         let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
-        let (prefetch_duration, has_timeline) =
-            if let Some(timeline) = &self.project.borrow().timeline {
-                (timeline.duration(), true)
-            } else {
-                (f64::MAX, false)
-            };
-        let segment_media_count = self.segment_medias.len();
+        let prefetch_duration = if let Some(timeline) = &self.project.borrow().timeline {
+            timeline.duration()
+        } else {
+            f64::MAX
+        };
 
         tokio::spawn(async move {
-            if !has_timeline {
-                warn!("Prefetch: No timeline configuration found");
-            }
-            if segment_media_count == 0 {
-                warn!("Prefetch: No segment media available");
-            }
             type PrefetchFuture = std::pin::Pin<
                 Box<
                     dyn std::future::Future<Output = (u32, u32, Option<DecodedSegmentFrames>)>
@@ -233,30 +222,32 @@ impl Playback {
 
                     if let Some((segment_time, segment)) =
                         cached_project.get_segment_time(prefetch_time)
-                        && let Some(segment_media) =
-                            prefetch_segment_medias.get(segment.recording_clip as usize)
                     {
-                        let clip_offsets = cached_project
-                            .clips
-                            .iter()
-                            .find(|v| v.index == segment.recording_clip)
-                            .map(|v| v.offsets)
-                            .unwrap_or_default();
+                        if let Some(segment_media) =
+                            prefetch_segment_medias.get(segment.recording_clip as usize)
+                        {
+                            let clip_offsets = cached_project
+                                .clips
+                                .iter()
+                                .find(|v| v.index == segment.recording_clip)
+                                .map(|v| v.offsets)
+                                .unwrap_or_default();
 
-                        let decoders = segment_media.decoders.clone();
-                        let hide_camera = cached_project.camera.hide;
-                        let segment_index = segment.recording_clip;
+                            let decoders = segment_media.decoders.clone();
+                            let hide_camera = cached_project.camera.hide;
+                            let segment_index = segment.recording_clip;
 
-                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
-                            in_flight_guard.insert(frame_num);
+                            if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                                in_flight_guard.insert(frame_num);
+                            }
+
+                            in_flight.push(Box::pin(async move {
+                                let result = decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await;
+                                (frame_num, segment_index, result)
+                            }));
                         }
-
-                        in_flight.push(Box::pin(async move {
-                            let result = decoders
-                                .get_frames(segment_time as f32, !hide_camera, clip_offsets)
-                                .await;
-                            (frame_num, segment_index, result)
-                        }));
                     }
 
                     next_prefetch_frame += 1;
@@ -287,31 +278,33 @@ impl Playback {
 
                         if let Some((segment_time, segment)) =
                             cached_project.get_segment_time(prefetch_time)
-                            && let Some(segment_media) =
-                                prefetch_segment_medias.get(segment.recording_clip as usize)
                         {
-                            let clip_offsets = cached_project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
-                                .unwrap_or_default();
+                            if let Some(segment_media) =
+                                prefetch_segment_medias.get(segment.recording_clip as usize)
+                            {
+                                let clip_offsets = cached_project
+                                    .clips
+                                    .iter()
+                                    .find(|v| v.index == segment.recording_clip)
+                                    .map(|v| v.offsets)
+                                    .unwrap_or_default();
 
-                            let decoders = segment_media.decoders.clone();
-                            let hide_camera = cached_project.camera.hide;
-                            let segment_index = segment.recording_clip;
+                                let decoders = segment_media.decoders.clone();
+                                let hide_camera = cached_project.camera.hide;
+                                let segment_index = segment.recording_clip;
 
-                            if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
-                                in_flight_guard.insert(behind_frame);
+                                if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                                    in_flight_guard.insert(behind_frame);
+                                }
+
+                                prefetched_behind.insert(behind_frame);
+                                in_flight.push(Box::pin(async move {
+                                    let result = decoders
+                                        .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                        .await;
+                                    (behind_frame, segment_index, result)
+                                }));
                             }
-
-                            prefetched_behind.insert(behind_frame);
-                            in_flight.push(Box::pin(async move {
-                                let result = decoders
-                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
-                                    .await;
-                                (behind_frame, segment_index, result)
-                            }));
                         }
                     }
                 }
@@ -331,12 +324,6 @@ impl Playback {
                                 segment_frames,
                                 segment_index,
                             }).await;
-                        } else if frames_decoded <= 5 {
-                            warn!(
-                                frame = frame_num,
-                                segment = segment_index,
-                                "Prefetch: decoder returned no frames"
-                            );
                         }
                     }
 
@@ -355,7 +342,7 @@ impl Playback {
             let (audio_playhead_tx, audio_playhead_rx) =
                 watch::channel(self.start_frame_number as f64 / fps as f64);
 
-            let has_audio = AudioPlayback {
+            AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
@@ -378,8 +365,6 @@ impl Playback {
 
             let warmup_target_frames = 20usize;
             let warmup_after_first_timeout = Duration::from_millis(1000);
-            let warmup_no_frames_timeout = Duration::from_secs(5);
-            let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
 
             while !*stop_rx.borrow() {
@@ -392,15 +377,6 @@ impl Playback {
 
                 if should_start {
                     break;
-                }
-
-                if first_frame_time.is_none() && warmup_start.elapsed() > warmup_no_frames_timeout {
-                    warn!(
-                        "Playback warmup timed out waiting for first frame after {:?}",
-                        warmup_start.elapsed()
-                    );
-                    let _ = event_tx.send(PlaybackEvent::Stop);
-                    return;
                 }
 
                 tokio::select! {
@@ -416,8 +392,6 @@ impl Playback {
                         if *stop_rx.borrow() {
                             break;
                         }
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
                     }
                 }
             }
@@ -639,20 +613,6 @@ impl Playback {
                         );
                     }
 
-                    let cursor_smoothing =
-                        (!cached_project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                            tension: cached_project.cursor.tension,
-                            mass: cached_project.cursor.mass,
-                            friction: cached_project.cursor.friction,
-                        });
-
-                    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-                        &segment_media.cursor,
-                        cursor_smoothing,
-                        cached_project.screen_movement_spring,
-                        duration,
-                    );
-
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
                         &cached_project,
@@ -661,8 +621,6 @@ impl Playback {
                         resolution_base,
                         &segment_media.cursor,
                         &segment_frames,
-                        duration,
-                        &zoom_focus_interpolator,
                     );
 
                     self.renderer
@@ -680,10 +638,9 @@ impl Playback {
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
-                if has_audio
-                    && audio_playhead_tx
-                        .send(frame_number as f64 / fps_f64)
-                        .is_err()
+                if audio_playhead_tx
+                    .send(frame_number as f64 / fps_f64)
+                    .is_err()
                 {
                     break 'playback;
                 }
@@ -706,10 +663,9 @@ impl Playback {
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
-                        if has_audio
-                            && audio_playhead_tx
-                                .send(frame_number as f64 / fps_f64)
-                                .is_err()
+                        if audio_playhead_tx
+                            .send(frame_number as f64 / fps_f64)
+                            .is_err()
                         {
                             break 'playback;
                         }
@@ -748,12 +704,12 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
-    fn spawn(self) -> bool {
+    fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
         if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
             info!("No audio segments found, skipping audio playback thread.");
-            return false;
+            return;
         }
 
         std::thread::spawn(move || {
@@ -828,8 +784,6 @@ impl AudioPlayback {
             let _ = handle.block_on(stop_rx.changed());
             info!("Audio playback thread finished.");
         });
-
-        true
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -904,16 +858,16 @@ impl AudioPlayback {
                         SupportedBufferSize::Unknown => desired,
                     };
 
-                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
-                        && clamped != desired
-                    {
-                        info!(
-                            requested_frames = desired,
-                            clamped_frames = clamped,
-                            range_min = *min,
-                            range_max = *max,
-                            "Adjusted requested audio buffer to fit device capabilities",
-                        );
+                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size() {
+                        if clamped != desired {
+                            info!(
+                                requested_frames = desired,
+                                clamped_frames = clamped,
+                                range_min = *min,
+                                range_max = *max,
+                                "Adjusted requested audio buffer to fit device capabilities",
+                            );
+                        }
                     }
 
                     config.buffer_size = BufferSize::Fixed(clamped);
@@ -995,22 +949,22 @@ impl AudioPlayback {
                 audio_renderer.prefill(&project_snapshot, initial_prefill);
             }
 
-            if let Some(hint) = static_latency_hint
-                && hint.latency_secs > 0.0
-            {
-                match hint.transport {
-                    cap_audio::OutputTransportKind::Airplay => info!(
-                        "Applying AirPlay output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
-                    transport if transport.is_wireless() => info!(
-                        "Applying wireless output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
-                    _ => info!(
-                        "Applying output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
+            if let Some(hint) = static_latency_hint {
+                if hint.latency_secs > 0.0 {
+                    match hint.transport {
+                        cap_audio::OutputTransportKind::Airplay => info!(
+                            "Applying AirPlay output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                        transport if transport.is_wireless() => info!(
+                            "Applying wireless output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                        _ => info!(
+                            "Applying output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                    }
                 }
             }
 

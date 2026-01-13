@@ -11,6 +11,7 @@ use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{
+    future::Future,
     sync::{
         Arc,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
@@ -140,9 +141,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             let scale =
                 display.physical_size().unwrap().width() / display.logical_size().unwrap().width();
 
-            let width = ensure_even((logical_size.width() * scale) as u32) as f64;
-            let height = ensure_even((logical_size.height() * scale) as u32) as f64;
-            PhysicalSize::new(width, height)
+            PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
         };
 
         debug!("size: {:?}", size);

@@ -5,13 +5,11 @@ use crate::{
     },
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
-    resolution_limits::ensure_even,
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use anyhow::Context as _;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
-use cap_timestamp::Timestamps;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
 use std::{
@@ -209,7 +207,6 @@ async fn create_pipeline(
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     max_output_size: Option<u32>,
-    start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
@@ -230,12 +227,7 @@ async fn create_pipeline(
                 ),
             )
         })
-        .unwrap_or_else(|| {
-            (
-                ensure_even(screen_info.width),
-                ensure_even(screen_info.height),
-            )
-        });
+        .unwrap_or((screen_info.width, screen_info.height));
 
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
@@ -245,7 +237,6 @@ async fn create_pipeline(
         mic_feed,
         output_path.clone(),
         output_resolution,
-        start_time,
         #[cfg(windows)]
         crate::capture_pipeline::EncoderPreferences::new(),
     )
@@ -342,8 +333,7 @@ pub async fn spawn_instant_recording_actor(
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
-    let timestamps = Timestamps::now();
-    let start_time = timestamps.system_time();
+    let start_time = SystemTime::now();
 
     trace!("creating recording actor");
 
@@ -382,7 +372,6 @@ pub async fn spawn_instant_recording_actor(
         screen_source.clone(),
         inputs.mic_feed.clone(),
         max_output_size,
-        timestamps,
     )
     .await?;
 
@@ -422,6 +411,11 @@ fn current_time_f64() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
+}
+
+fn ensure_even(value: u32) -> u32 {
+    let adjusted = value - (value % 2);
+    if adjusted == 0 { 2 } else { adjusted }
 }
 
 fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
