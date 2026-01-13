@@ -44,6 +44,11 @@ jobs:
           cache-all-crates: "true"
           key: v3-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Setup Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
       - name: Install dependencies
         run: pnpm install
 
