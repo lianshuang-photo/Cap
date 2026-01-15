@@ -61,7 +61,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
-          pnpm tauri build --target aarch64-apple-darwin
+          pnpm build:tauri --target aarch64-apple-darwin
         env:
           CI: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,16 +1,16 @@
 use cap_audio::FromSampleBytes;
 #[cfg(not(target_os = "windows"))]
-use cap_audio::{LatencyCorrectionConfig, LatencyCorrector, default_output_latency_hint};
+use cap_audio::{default_output_latency_hint, LatencyCorrectionConfig, LatencyCorrector};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    SampleFormat,
+};
 #[cfg(not(target_os = "windows"))]
 use cpal::{BufferSize, SupportedBufferSize};
-use cpal::{
-    SampleFormat,
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-};
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
@@ -342,7 +342,7 @@ impl Playback {
             let (audio_playhead_tx, audio_playhead_rx) =
                 watch::channel(self.start_frame_number as f64 / fps as f64);
 
-            AudioPlayback {
+            let has_audio = AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
@@ -638,9 +638,10 @@ impl Playback {
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
-                if audio_playhead_tx
-                    .send(frame_number as f64 / fps_f64)
-                    .is_err()
+                if has_audio
+                    && audio_playhead_tx
+                        .send(frame_number as f64 / fps_f64)
+                        .is_err()
                 {
                     break 'playback;
                 }
@@ -663,9 +664,10 @@ impl Playback {
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
-                        if audio_playhead_tx
-                            .send(frame_number as f64 / fps_f64)
-                            .is_err()
+                        if has_audio
+                            && audio_playhead_tx
+                                .send(frame_number as f64 / fps_f64)
+                                .is_err()
                         {
                             break 'playback;
                         }
@@ -704,12 +706,12 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
-    fn spawn(self) {
+    fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
 
         if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
             info!("No audio segments found, skipping audio playback thread.");
-            return;
+            return false;
         }
 
         std::thread::spawn(move || {
@@ -784,6 +786,8 @@ impl AudioPlayback {
             let _ = handle.block_on(stop_rx.changed());
             info!("Audio playback thread finished.");
         });
+
+        true
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -858,7 +862,8 @@ impl AudioPlayback {
                         SupportedBufferSize::Unknown => desired,
                     };
 
-                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size() {
+                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
+                    {
                         if clamped != desired {
                             info!(
                                 requested_frames = desired,
